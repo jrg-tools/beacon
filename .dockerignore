@@ -1,0 +1,12 @@
+target/
+data/
+web/node_modules/
+web/build/
+web/.svelte-kit/
+.git/
+.github/
+.env
+.env.*
+*.md
+Dockerfile
+.dockerignore
