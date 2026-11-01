@@ -4,10 +4,8 @@
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { api, ApiError } from '#lib/api.ts';
-	import DeviceList from '#lib/components/DeviceList.svelte';
 	import ProjectForm from '#lib/components/ProjectForm.svelte';
 	import ProjectList from '#lib/components/ProjectList.svelte';
-	import ReleaseList from '#lib/components/ReleaseList.svelte';
 	import type { Project, ProjectInput } from '#lib/types.ts';
 
 	let projects = $state<Project[]>([]);
@@ -51,7 +49,7 @@
 <svelte:head><title>{project ? `${project.name} · ` : ''}Beacon</title></svelte:head>
 
 <div
-	class="mx-auto grid max-w-7xl gap-10 px-4 pt-4 pb-20 sm:px-6 sm:pt-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
+	class="mx-auto grid max-w-7xl gap-10 px-4 pb-20 sm:px-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
 >
 	<section class="space-y-10">
 		<div>
@@ -60,17 +58,13 @@
 			</h1>
 			{#key project?.id}<ProjectForm {project} onsave={save} />{/key}
 		</div>
-		{#if project}
-			<div><DeviceList projectId={project.id} onchange={load} /></div>
-			<div><ReleaseList projectId={project.id} repo={project.repo} /></div>
-		{/if}
 	</section>
 
 	<aside class="space-y-6 lg:col-start-2 lg:row-start-1">
 		{#if error}
 			<!-- jrg-life's sign-in notice. -->
 			<p
-				class="rounded-xl border border-yellow-500/40 bg-yellow-400/10 px-4 py-3 text-sm"
+				class="rounded-lg border border-yellow-500/40 bg-yellow-400/10 px-4 py-3 text-sm"
 				role="alert"
 			>
 				{error}

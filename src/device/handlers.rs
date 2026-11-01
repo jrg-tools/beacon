@@ -16,17 +16,46 @@ use crate::{
     state::{AppState, now},
 };
 
-/// Counts an update check (`check`) or an asset download.
-async fn seen(state: &AppState, device: &Device, version: Option<&str>, check: bool) -> Result<()> {
+/// What a device request did, for the counters and the project page's charts.
+enum Seen<'a> {
+    Check {
+        version: Option<&'a str>,
+        channel: &'a str,
+    },
+    Download {
+        bytes: i64,
+    },
+}
+
+async fn seen(state: &AppState, device: &Device, what: Seen<'_>) -> Result<()> {
+    let (kind, version, channel, bytes) = match what {
+        Seen::Check { version, channel } => ("check", version, Some(channel), None),
+        Seen::Download { bytes } => ("download", None, None, Some(bytes)),
+    };
+    let check = kind == "check";
+    let at = now();
     sqlx::query(
         "UPDATE devices SET last_seen = ?, last_version = COALESCE(?, last_version),
            checks = checks + ?, downloads = downloads + ? WHERE id = ?",
     )
-    .bind(now())
+    .bind(at)
     .bind(version)
     .bind(check as i64)
     .bind(!check as i64)
     .bind(&device.id)
+    .execute(&state.db)
+    .await?;
+    sqlx::query(
+        "INSERT INTO device_events (project_id, device_id, at, kind, version, channel, bytes)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(device.project_id)
+    .bind(&device.id)
+    .bind(at)
+    .bind(kind)
+    .bind(version)
+    .bind(channel)
+    .bind(bytes)
     .execute(&state.db)
     .await?;
     Ok(())
@@ -59,8 +88,10 @@ pub async fn latest(
     Query(q): Query<LatestQuery>,
 ) -> Result<Json<Value>> {
     device.check_project(&project)?;
-    seen(&state, &device, q.current.as_deref(), true).await?;
     let beta = q.channel.as_deref() == Some("beta");
+    let channel = if beta { "beta" } else { "stable" };
+    let version = q.current.as_deref();
+    seen(&state, &device, Seen::Check { version, channel }).await?;
     let (version, release) = store::latest_release(&state.db, device.project_id, beta)
         .await?
         .ok_or(status(StatusCode::NOT_FOUND, "no release"))?;
@@ -96,10 +127,11 @@ pub async fn download(
     Path((project, tag, name)): Path<(String, String, String)>,
 ) -> Result<Response> {
     device.check_project(&project)?;
-    seen(&state, &device, None, false).await?;
     let asset = store::find_asset(&state.db, device.project_id, &tag, &name)
         .await?
         .ok_or(status(StatusCode::NOT_FOUND, "no such asset"))?;
+    let bytes = asset.size;
+    seen(&state, &device, Seen::Download { bytes }).await?;
     let asset = cached(&state, &device, asset).await?;
     let file = tokio::fs::File::open(cache::path(&state, asset.github_id)).await?;
     let headers = [

@@ -6,8 +6,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::projects::DAYS;
 use crate::{
     error::{Result, status},
+    firmware::{store, version},
     state::{AppState, now},
 };
 
@@ -20,19 +22,45 @@ pub struct DeviceRow {
     last_version: Option<String>,
     checks: i64,
     downloads: i64,
+    #[sqlx(skip)]
+    up_to_date: bool,
+    /// Requests per day over the project page's chart window, oldest first.
+    #[sqlx(skip)]
+    activity: Vec<i64>,
 }
 
 pub async fn list(
     State(state): State<AppState>,
     Path(project_id): Path<i64>,
 ) -> Result<Json<Vec<DeviceRow>>> {
-    let rows = sqlx::query_as(
+    let mut rows: Vec<DeviceRow> = sqlx::query_as(
         "SELECT id, name, created_at, last_seen, last_version, checks, downloads FROM devices
          WHERE project_id = ? ORDER BY name",
     )
     .bind(project_id)
     .fetch_all(&state.db)
     .await?;
+    let latest = store::latest_release(&state.db, project_id, false).await?;
+    let first = now() / 86400 - DAYS + 1;
+    let counts: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT device_id, at / 86400 AS day, COUNT(*) FROM device_events
+         WHERE project_id = ? AND at >= ? GROUP BY device_id, day",
+    )
+    .bind(project_id)
+    .bind(first * 86400)
+    .fetch_all(&state.db)
+    .await?;
+    for row in &mut rows {
+        row.up_to_date = latest
+            .as_ref()
+            .is_some_and(|(l, _)| !version::update_available(l, row.last_version.as_deref()));
+        row.activity = vec![0; DAYS as usize];
+        for (_, day, n) in counts.iter().filter(|c| c.0 == row.id) {
+            if let Some(slot) = row.activity.get_mut((day - first) as usize) {
+                *slot = *n;
+            }
+        }
+    }
     Ok(Json(rows))
 }
 

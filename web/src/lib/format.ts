@@ -15,3 +15,12 @@ export function size(bytes: number): string {
 export function date(iso: string): string {
 	return iso ? new Date(iso).toLocaleString() : '—';
 }
+
+/** "Oct 31" from a unix day number, in UTC like the server's buckets. */
+export function day(n: number): string {
+	return new Date(n * 86400000).toLocaleDateString(undefined, {
+		month: 'short',
+		day: 'numeric',
+		timeZone: 'UTC'
+	});
+}

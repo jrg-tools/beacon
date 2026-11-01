@@ -49,3 +49,71 @@ pub fn router(state: AppState, ui_dir: &Path) -> Router<AppState> {
 async fn config(State(state): State<AppState>) -> Json<Value> {
     Json(json!({ "clerk_publishable_key": state.clerk.publishable_key }))
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::extract::{Path, State};
+
+    use crate::{
+        state::now,
+        tests::{call, setup, signed},
+    };
+
+    #[tokio::test]
+    async fn stats_follow_device_requests() {
+        let (state, dir) = setup().await;
+        for path in [
+            "/api/v1/firmware/ab98/latest?current=v1.1.0",
+            "/api/v1/firmware/ab98/releases/v1.2.0/firmware.bin",
+            "/api/v1/firmware/ab98/latest?current=v1.2.0&channel=beta",
+        ] {
+            call(&state, signed(path, "s3cret", now())).await;
+        }
+
+        let stats = super::projects::stats(State(state.clone()), Path(1))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        assert_eq!(stats["devices"], 1);
+        assert_eq!(stats["active_24h"], 1);
+        assert_eq!(stats["up_to_date"], 1);
+        assert_eq!(stats["latest"], "v1.2.0");
+        assert_eq!(stats["updates"], 1); // v1.1.0 -> v1.2.0
+        assert_eq!(stats["channels"]["beta"], 1);
+        assert_eq!(stats["versions"]["v1.2.0"], 1);
+        let days = stats["days"].as_array().unwrap();
+        assert_eq!(days.len(), super::projects::DAYS as usize);
+        let today = days.last().unwrap();
+        assert_eq!(
+            (today["checks"].clone(), today["downloads"].clone()),
+            (2.into(), 1.into())
+        );
+        assert_eq!(
+            (today["bytes"].clone(), today["active"].clone()),
+            (5.into(), 1.into())
+        );
+
+        let releases = super::projects::releases(State(state.clone()), Path(1))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        let mut installed: Vec<_> = releases
+            .iter()
+            .map(|r| (r["tag"].as_str().unwrap(), r["devices"].as_i64().unwrap()))
+            .collect();
+        installed.sort(); // both fixtures share a publish date
+        assert_eq!(installed, [("v1.2.0", 1), ("v1.3.0-rc1", 0)]);
+
+        let devices = super::devices::list(State(state.clone()), Path(1))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        let device = serde_json::to_value(&devices[0]).unwrap();
+        assert_eq!(device["up_to_date"], true);
+        assert_eq!(device["activity"].as_array().unwrap().last().unwrap(), 3);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

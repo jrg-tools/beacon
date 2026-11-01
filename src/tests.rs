@@ -24,7 +24,7 @@ const FIXTURES: [&str; 6] = [
     "INSERT INTO devices (id, project_id, name, secret, created_at) VALUES ('dev_1', 1, 'desk', 's3cret', 0)",
 ];
 
-async fn setup() -> (AppState, PathBuf) {
+pub(crate) async fn setup() -> (AppState, PathBuf) {
     let dir = std::env::temp_dir().join(format!(
         "beacon-test-{}",
         hex::encode(rand::random::<[u8; 8]>())
@@ -51,7 +51,7 @@ async fn setup() -> (AppState, PathBuf) {
     (State::new(db, http, github, clerk, cache_dir, ui_dir), dir)
 }
 
-fn signed(path: &str, secret: &str, ts: i64) -> Request<Body> {
+pub(crate) fn signed(path: &str, secret: &str, ts: i64) -> Request<Body> {
     let sig = hex::encode(
         device::signature(secret, ts, "GET", path)
             .finalize()
@@ -69,7 +69,7 @@ fn get(path: &str) -> Request<Body> {
     Request::get(path).body(Body::empty()).unwrap()
 }
 
-async fn call(state: &AppState, req: Request<Body>) -> (StatusCode, HeaderMap, Vec<u8>) {
+pub(crate) async fn call(state: &AppState, req: Request<Body>) -> (StatusCode, HeaderMap, Vec<u8>) {
     let res = app::router(state.clone()).oneshot(req).await.unwrap();
     let (parts, body) = res.into_parts();
     let body = axum::body::to_bytes(body, usize::MAX)

@@ -7,7 +7,7 @@
 </script>
 
 <ul
-	class="divide-y divide-zinc-200 overflow-hidden rounded-2xl border border-zinc-200 bg-white sm:rounded-3xl dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900/60"
+	class="divide-y divide-zinc-200 overflow-hidden rounded-lg border border-zinc-200 bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900/60"
 >
 	{#each items as item (key(item))}
 		<li>{@render row(item)}</li>

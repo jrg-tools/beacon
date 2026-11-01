@@ -1,6 +1,7 @@
 @import 'tailwindcss';
 
 /* The look of jrg-life (its src/routes/layout.css): Figtree, zinc, yellow. */
+/* One corner for every box, field and button: rounded-lg. Only pills (tags, status dots) are rounded-full. */
 @theme {
 	--font-sans: 'Figtree', ui-sans-serif, system-ui, sans-serif;
 }
@@ -11,12 +12,12 @@ html {
 }
 
 .field {
-	@apply w-full rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 text-base transition outline-none focus:border-yellow-500 focus:ring-4 focus:ring-yellow-400/20 aria-invalid:border-red-500 sm:text-sm dark:border-zinc-800 dark:bg-zinc-900;
+	@apply w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-base transition outline-none focus:border-yellow-500 focus:ring-4 focus:ring-yellow-400/20 aria-invalid:border-red-500 sm:text-sm dark:border-zinc-800 dark:bg-zinc-900;
 }
 
 /* Row actions in lists, as in jrg-life's admin. */
 .action {
-	@apply cursor-pointer rounded-full px-3 py-2 text-sm font-semibold hover:bg-zinc-200/60 disabled:opacity-40 sm:py-1 dark:hover:bg-zinc-800/60;
+	@apply cursor-pointer rounded-lg px-3 py-2 text-sm font-semibold hover:bg-zinc-200/60 disabled:opacity-40 sm:py-1 dark:hover:bg-zinc-800/60;
 }
 
 .action-danger {

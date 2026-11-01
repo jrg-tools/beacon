@@ -46,6 +46,14 @@ pub async fn every(state: AppState, period: Duration) {
     let mut tick = tokio::time::interval(period);
     loop {
         tick.tick().await;
+        let old = now() - 90 * 86400;
+        if let Err(e) = sqlx::query("DELETE FROM device_events WHERE at < ?")
+            .bind(old)
+            .execute(&state.db)
+            .await
+        {
+            tracing::error!("pruning device events: {e}");
+        }
         match sqlx::query_as::<_, (i64,)>("SELECT id FROM projects")
             .fetch_all(&state.db)
             .await

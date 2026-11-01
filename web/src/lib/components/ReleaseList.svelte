@@ -20,12 +20,20 @@
 							href="https://github.com/{repo}/releases/tag/{encodeURIComponent(release.tag)}"
 							target="_blank"
 							rel="noopener noreferrer"
-							class="hover:underline">{release.tag}</a
+							class="transition hover:text-zinc-500 dark:hover:text-zinc-400"
+							>{release.tag} <span class="text-xs text-zinc-400">↗</span></a
 						>
 						{#if release.prerelease}
 							<span
 								class="rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-500 dark:border-zinc-700"
 								>prerelease</span
+							>
+						{/if}
+						{#if release.devices}
+							<span
+								class="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-500 dark:border-zinc-700"
+								><span class="size-1.5 rounded-full bg-emerald-500"></span>installed on {release.devices}
+								{release.devices === 1 ? 'device' : 'devices'}</span
 							>
 						{/if}
 						<span class="ml-auto text-xs font-normal text-zinc-400">

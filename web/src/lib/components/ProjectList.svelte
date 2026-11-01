@@ -33,7 +33,7 @@
 					: ''}"
 			>
 				<span
-					class="grid size-10 shrink-0 place-items-center rounded-md bg-amber-100 text-xl dark:bg-amber-500/15"
+					class="grid size-10 shrink-0 place-items-center rounded-lg bg-amber-100 text-xl dark:bg-amber-500/15"
 					aria-hidden="true">{project.emoji}</span
 				>
 				<div class="min-w-0 flex-1">
@@ -54,6 +54,7 @@
 					{/if}
 				</div>
 				<div class="-mx-3 flex w-full justify-end sm:mx-0 sm:w-auto">
+					<a href="{resolve('/project')}?id={project.id}" class="action">Open</a>
 					<a href="{resolve('/')}?project={project.id}" class="action">Edit</a>
 					<button class="action" onclick={() => run(() => api.syncProject(project.id))}>
 						Sync

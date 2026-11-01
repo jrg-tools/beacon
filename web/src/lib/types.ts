@@ -27,6 +27,8 @@ export interface Release {
 	tag: string;
 	prerelease: boolean;
 	published_at: string;
+	/** Devices whose last reported version is this release. */
+	devices: number;
 	assets: Asset[];
 }
 
@@ -38,16 +40,39 @@ export interface Device {
 	last_version: string | null;
 	checks: number;
 	downloads: number;
+	up_to_date: boolean;
+	/** Requests per day over the last 30 days, oldest first. */
+	activity: number[];
+}
+
+/** One UTC day of a project's device traffic. */
+export interface StatsDay {
+	/** Unix day number (days since 1970-01-01). */
+	day: number;
+	checks: number;
+	downloads: number;
+	bytes: number;
+	/** Devices that made any request. */
+	active: number;
 }
 
 export interface ProjectStats {
 	devices: number;
 	active_24h: number;
+	active_7d: number;
 	up_to_date: number;
+	latest: string | null;
+	/** All time, from the device counters. */
 	checks: number;
 	downloads: number;
+	/** Version changes devices reported in the last 30 days. */
+	updates: number;
+	/** Devices per channel over the last 30 days. */
+	channels: Record<string, number>;
 	/** Device count per last reported version ("unknown" if none yet). */
 	versions: Record<string, number>;
+	/** The last 30 days, oldest first. */
+	days: StatsDay[];
 }
 
 /** Returned once, when a device is registered. */
