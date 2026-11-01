@@ -4,7 +4,10 @@
 	import List from './List.svelte';
 
 	let { projectId, repo }: { projectId: number; repo: string } = $props();
-	const releases = $derived(api.releases(projectId));
+	// The 5 newest (the server sorts by date) and any older one a device runs or is updating to.
+	const releases = $derived(
+		api.releases(projectId).then((list) => list.filter((r, i) => i < 5 || r.devices || r.pending))
+	);
 </script>
 
 <h2 class="mb-4 text-sm font-semibold text-zinc-500 uppercase">Releases</h2>
@@ -12,7 +15,7 @@
 	<p class="text-xs text-zinc-500">Loading…</p>
 {:then list}
 	{#if list.length}
-		<List items={list} key={(r) => r.tag}>
+		<List items={list} key={(r) => r.tag} pageSize={10}>
 			{#snippet row(release)}
 				<div class="space-y-1 px-4 py-3">
 					<p class="flex flex-wrap items-center gap-2 font-semibold">

@@ -28,6 +28,8 @@
 	let booted = $state('');
 
 	const release = $derived(releases.find((r) => r.tag === tag));
+	// The 5 newest (the server sorts by date) and the current release, which may be older than them.
+	const offered = $derived(releases.filter((r, i) => i < 5 || r.tag === project?.latest));
 	// "bootloader.bin@0x0,partitions.bin@0x8000", as the server normalised it.
 	const extras = $derived(
 		(project?.first_flash ?? '')
@@ -146,7 +148,7 @@
 		>
 		<div class="min-w-0">
 			<h1 class="truncate text-xl font-semibold">First flash</h1>
-			<p class="truncate text-xs text-zinc-400">
+			<p class="text-xs text-zinc-400 sm:truncate">
 				Erases a blank or bricked {project?.name ?? ''} board over USB and writes everything.
 			</p>
 		</div>
@@ -170,8 +172,8 @@
 	<section class="space-y-4">
 		<label class="block space-y-2">
 			<span class="text-sm font-semibold text-zinc-500 uppercase">Version</span>
-			<select bind:value={tag} disabled={running || !releases.length} class="field">
-				{#each releases as r (r.tag)}
+			<select bind:value={tag} disabled={running || !offered.length} class="field">
+				{#each offered as r (r.tag)}
 					<option value={r.tag}
 						>{r.tag}{r.prerelease ? ' (prerelease)' : ''}{r.tag === project?.latest
 							? ' (latest)'

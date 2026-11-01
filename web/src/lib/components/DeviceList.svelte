@@ -106,12 +106,13 @@
 {#if error}<p class="mb-4 text-sm font-semibold text-red-600" role="alert">{error}</p>{/if}
 
 {#if devices.length}
-	<List items={devices} key={(d) => d.id}>
+	<List items={devices} key={(d) => d.id} pageSize={10}>
 		{#snippet row(device)}
 			<div class="flex flex-wrap items-center gap-x-3 gap-y-1 py-3 pr-2 pl-4">
 				<div class="min-w-0 flex-1">
-					<p class="flex items-center gap-2 truncate font-semibold">
-						{device.name}
+					<!-- The version pill wraps under a long name instead of being cut off. -->
+					<p class="flex flex-wrap items-center gap-x-2 gap-y-1 font-semibold">
+						<span class="min-w-0 truncate">{device.name}</span>
 						<span
 							class="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-500 dark:border-zinc-700"
 						>
@@ -143,7 +144,8 @@
 						</p>
 					{/if}
 				</div>
-				<div class="w-24 shrink-0">
+				<!-- Too cramped beside the details on a phone; the project stats chart the same traffic. -->
+				<div class="hidden w-24 shrink-0 sm:block">
 					<BarChart title="{device.name}: requests per day" data={activity(device)} />
 				</div>
 				<button class="action action-danger" onclick={() => revoke(device)}>Revoke</button>

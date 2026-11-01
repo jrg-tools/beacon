@@ -49,7 +49,7 @@
 <svelte:head><title>{project ? `${project.name} · ` : ''}Beacon</title></svelte:head>
 
 <div
-	class="mx-auto grid max-w-7xl gap-10 px-4 pb-20 sm:px-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
+	class="mx-auto grid max-w-7xl grid-cols-1 gap-10 px-4 pb-20 sm:px-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
 >
 	<section class="space-y-10">
 		<div>

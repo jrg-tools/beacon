@@ -62,7 +62,7 @@
 					{:else if state === 'failed'}
 						<span class="text-red-500">✕</span>
 					{/if}
-					<span class="truncate">{label}</span>
+					<span class="min-w-0 leading-tight sm:truncate">{label}</span>
 				</p>
 			</li>
 		{/each}

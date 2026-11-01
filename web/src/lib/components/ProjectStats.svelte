@@ -6,7 +6,41 @@
 
 	const sum = (key: 'checks' | 'downloads' | 'bytes') => stats.days.reduce((n, d) => n + d[key], 0);
 	const pct = (n: number) => (stats.devices ? `${Math.round((n / stats.devices) * 100)}%` : '—');
-	const versions = $derived(Object.entries(stats.versions).sort((a, b) => b[1] - a[1]));
+	// From the dataviz skill's palette, light and dark steps: green for the latest, then the 3 hues
+	// that stay apart from it and each other in any order, even with color blindness.
+	const GREEN = ['#008300', '#008300'];
+	const PALETTE = [
+		['#2a78d6', '#3987e5'],
+		['#eda100', '#c98500'],
+		['#e87ba4', '#d55181']
+	];
+	const GRAY = ['#a1a1aa', '#52525b']; // "unknown" and "other": not a version
+	// As GitHub's language bar: biggest share first; the latest and 3 more, the rest fold into "other".
+	// Colors follow the version (newest gets the first), so a count changing never repaints one.
+	const versions = $derived.by(() => {
+		const sorted = Object.entries(stats.versions).sort((a, b) => b[1] - a[1]);
+		const others = sorted.filter(([v]) => v !== 'unknown' && v !== stats.latest);
+		const top = others.slice(0, PALETTE.length);
+		const byName = top
+			.map(([v]) => v)
+			.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+		const rest = others.slice(PALETTE.length).reduce((n, [, c]) => n + c, 0);
+		const latest = stats.latest ? (stats.versions[stats.latest] ?? 0) : 0;
+		const unknown = stats.versions.unknown ?? 0;
+		return [
+			...top.map(([version, count]) => ({
+				version,
+				count,
+				color: PALETTE[byName.indexOf(version)]
+			})),
+			...(latest ? [{ version: stats.latest!, count: latest, color: GREEN }] : []),
+			...(rest ? [{ version: 'other', count: rest, color: GRAY }] : [])
+		]
+			.sort((a, b) => b.count - a.count)
+			.concat(unknown ? [{ version: 'unknown', count: unknown, color: GRAY }] : []);
+	});
+	let counts = $state(false);
+	const share = (n: number) => `${((n / stats.devices) * 100).toFixed(1)}%`;
 
 	const tiles = $derived([
 		{ label: 'Devices', value: stats.devices, note: `${stats.active_24h} active in 24 h` },
@@ -47,7 +81,7 @@
 		>
 			<dt class="text-xs text-zinc-500">{tile.label}</dt>
 			<dd class="text-2xl font-semibold">{tile.value}</dd>
-			<dd class="truncate text-[11px] text-zinc-400">{tile.note}</dd>
+			<dd class="text-[11px] text-zinc-400 sm:truncate">{tile.note}</dd>
 		</div>
 	{/each}
 </dl>
@@ -55,24 +89,53 @@
 {#if versions.length}
 	<div class="mt-6">
 		<h3 class="mb-2 text-xs font-semibold text-zinc-500">Versions in the field</h3>
-		<ul class="space-y-1.5">
-			{#each versions as [version, count] (version)}
-				<li class="grid grid-cols-[6rem_minmax(0,1fr)_3rem] items-center gap-3 text-xs">
-					<span class="truncate font-medium">
-						{version}{#if version === stats.latest}<span class="text-zinc-400">&nbsp;· latest</span
-							>{/if}
-					</span>
-					<span class="h-3">
+		<!-- Click for device counts instead of shares, as GitHub's language list. -->
+		<button
+			class="block w-full cursor-pointer space-y-2.5 text-left"
+			onclick={() => (counts = !counts)}
+			aria-pressed={counts}
+			title={counts ? 'Show shares' : 'Show device counts'}
+		>
+			<span class="flex h-2 gap-0.5 overflow-hidden rounded-full" aria-hidden="true">
+				{#each versions as v (v.version)}
+					<span
+						class="swatch h-full"
+						style:--light={v.color[0]}
+						style:--dark={v.color[1]}
+						style:flex-grow={v.count}
+						title="{v.version}: {v.count} {v.count === 1 ? 'device' : 'devices'} ({share(v.count)})"
+					></span>
+				{/each}
+			</span>
+			<span class="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+				{#each versions as v (v.version)}
+					<span class="inline-flex items-center gap-1.5">
 						<span
-							class="block h-full rounded-full {version === stats.latest
-								? 'bg-emerald-500'
-								: 'bg-yellow-400'}"
-							style:width="{(count / stats.devices) * 100}%"
+							class="swatch size-2 rounded-full"
+							style:--light={v.color[0]}
+							style:--dark={v.color[1]}
 						></span>
+						<span class="font-semibold">{v.version}</span>
+						{#if v.version === stats.latest}<span class="text-zinc-400">latest</span>{/if}
+						<span class="text-zinc-500 tabular-nums"
+							>{counts
+								? `${v.count} ${v.count === 1 ? 'device' : 'devices'}`
+								: share(v.count)}</span
+						>
 					</span>
-					<span class="text-right text-zinc-500">{count}</span>
-				</li>
-			{/each}
-		</ul>
+				{/each}
+			</span>
+		</button>
 	</div>
 {/if}
+
+<style>
+	.swatch {
+		background: var(--light);
+	}
+	@media (prefers-color-scheme: dark) {
+		.swatch {
+			background: var(--dark);
+		}
+	}
+</style>

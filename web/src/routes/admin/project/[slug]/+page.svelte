@@ -75,11 +75,14 @@
 						· {project.latest ?? 'no release'} · synced {ago(project.synced_at)}
 					</p>
 				</div>
-				<a href="{resolve('/admin')}?project={project.id}" class="action">Edit</a>
-				<a href={resolve('/firmware/[slug]', { slug: project.slug })} class="action">Install</a>
-				<a href={resolve('/admin/project/[slug]/flash', { slug: project.slug })} class="action"
-					>First flash</a
-				>
+				<!-- Its own row on phones, so the name keeps the width. -->
+				<nav class="-ml-3 flex w-full gap-1 sm:ml-0 sm:w-auto">
+					<a href="{resolve('/admin')}?project={project.id}" class="action">Edit</a>
+					<a href={resolve('/firmware/[slug]', { slug: project.slug })} class="action">Install</a>
+					<a href={resolve('/admin/project/[slug]/flash', { slug: project.slug })} class="action"
+						>First flash</a
+					>
+				</nav>
 			</header>
 		{/if}
 	</div>
@@ -92,7 +95,7 @@
 			</section>
 		{/if}
 
-		<div class="grid gap-10 lg:grid-cols-2">
+		<div class="grid grid-cols-1 gap-10 lg:grid-cols-2">
 			<section><DeviceList projectId={id} onchange={load} /></section>
 			<!-- Reloads only when a sync finishes. -->
 			{#key project.synced_at}

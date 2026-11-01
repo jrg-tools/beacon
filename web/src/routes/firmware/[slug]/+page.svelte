@@ -12,7 +12,10 @@
 	const slug = $derived(page.params.slug ?? '');
 
 	let project = $state<InstallProject | null>(null);
-	const releases = $derived(project?.releases ?? []);
+	// The 5 newest (the server sorts by date) and the current release, which may be older than them.
+	const releases = $derived(
+		(project?.releases ?? []).filter((r, i) => i < 5 || r.tag === project?.latest)
+	);
 	let tag = $state('');
 	let error = $state('');
 
@@ -172,7 +175,7 @@
 			>
 			<div class="min-w-0">
 				<h1 class="truncate text-xl font-semibold">Install firmware</h1>
-				<p class="truncate text-xs text-zinc-400">
+				<p class="text-xs text-zinc-400 sm:truncate">
 					Over USB, onto a registered {project?.name ?? ''} device. Its settings and key stay.
 				</p>
 			</div>
