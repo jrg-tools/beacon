@@ -80,6 +80,15 @@ pub async fn find_asset(
     .await
 }
 
+/// Marks the asset as not cached; the next request downloads and hashes it again.
+pub async fn clear_hashes(db: &SqlitePool, id: i64) -> sqlx::Result<()> {
+    sqlx::query("UPDATE assets SET sha256 = NULL, md5 = NULL WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 pub async fn set_hashes(db: &SqlitePool, id: i64, sha256: &str, md5: &str) -> sqlx::Result<()> {
     sqlx::query("UPDATE assets SET sha256 = ?, md5 = ? WHERE id = ?")
         .bind(sha256)

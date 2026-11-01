@@ -92,7 +92,8 @@ void addBeaconHeaders(HTTPClient* http, const String& pathQuery) {
 download (for example `firmware.bin,firmware-filesystem.bin` for AB98, or
 `mayanhcu-firmware.bin,mayanhcu-filesystem.bin` for `jrg-tools/mayanhcu-releases`). Only semver tags
 with at least one of those assets count as releases. The newest stable release is cached right after
-each sync.
+each sync, and each sync deletes the cached files of releases that are neither the newest (stable or
+beta) nor the version a device last reported; a device asking for one again gets it from GitHub.
 
 ## Run
 

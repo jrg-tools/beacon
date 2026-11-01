@@ -102,6 +102,7 @@ async fn run(state: &AppState, project: &Project) -> anyhow::Result<()> {
     tx.commit().await?;
 
     cache::remove_orphans(state).await?;
+    cache::remove_unused(state, project.id).await?;
     // Warm the cache with what devices will ask for next.
     if let Some((_, release)) = store::latest_release(&state.db, project.id, false).await? {
         for asset in store::release_assets(&state.db, release.id).await? {

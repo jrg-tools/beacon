@@ -5,7 +5,7 @@ use std::{collections::HashSet, path::PathBuf};
 use anyhow::Context;
 use tokio::fs;
 
-use super::{AssetRow, store};
+use super::{AssetRow, parse_version, store, version::pick_latest};
 use crate::state::AppState;
 
 pub fn path(state: &AppState, github_id: i64) -> PathBuf {
@@ -59,4 +59,90 @@ pub async fn remove_orphans(state: &AppState) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Deletes the cached files of the project's releases that no device runs and that are not the
+/// newest (stable or beta): nobody is about to download them. A device that still asks for one
+/// gets it fetched from GitHub again, like any uncached asset.
+pub async fn remove_unused(state: &AppState, project_id: i64) -> anyhow::Result<()> {
+    let releases = store::releases(&state.db, project_id).await?;
+    let newest: HashSet<i64> = [false, true]
+        .into_iter()
+        .filter_map(|beta| pick_latest(releases.clone(), beta).map(|(_, r)| r.id))
+        .collect();
+    let reported: Vec<(Option<String>,)> =
+        sqlx::query_as("SELECT last_version FROM devices WHERE project_id = ?")
+            .bind(project_id)
+            .fetch_all(&state.db)
+            .await?;
+    let running: Vec<_> = reported
+        .iter()
+        .filter_map(|(v,)| v.as_deref().and_then(parse_version))
+        .collect();
+    // Not while ensure() is writing a file and its hashes.
+    let _guard = state.fetch_lock.lock().await;
+    for release in releases {
+        let in_use = parse_version(&release.tag).is_some_and(|v| running.contains(&v));
+        if newest.contains(&release.id) || in_use {
+            continue;
+        }
+        for asset in store::release_assets(&state.db, release.id).await? {
+            if asset.sha256.is_none() {
+                continue;
+            }
+            tracing::info!(
+                tag = release.tag,
+                asset = asset.name,
+                "evicting unused asset"
+            );
+            store::clear_hashes(&state.db, asset.id).await?;
+            // A download streaming this file keeps its open handle.
+            match fs::remove_file(path(state, asset.github_id)).await {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::setup;
+
+    #[tokio::test]
+    async fn evicts_releases_nobody_runs() {
+        let (state, dir) = setup().await;
+        for sql in [
+            "INSERT INTO releases (id, project_id, tag, prerelease, notes, published_at) VALUES (3, 1, 'v1.1.0', 0, 'n', '')",
+            "INSERT INTO assets (release_id, name, github_id, size, sha256, md5) VALUES (3, 'firmware.bin', 66, 5, 'cc', 'dd')",
+        ] {
+            sqlx::query(sql).execute(&state.db).await.unwrap();
+        }
+        std::fs::write(super::path(&state, 66), b"older").unwrap();
+        let cached = |id: i64| super::path(&state, id).exists();
+
+        // A device on v1.1.0 keeps it.
+        sqlx::query("UPDATE devices SET last_version = '1.1.0'")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        super::remove_unused(&state, 1).await.unwrap();
+        assert!(cached(66) && cached(77));
+
+        // Once it moves on, only the newest (v1.2.0) stays.
+        sqlx::query("UPDATE devices SET last_version = 'v1.2.0'")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        super::remove_unused(&state, 1).await.unwrap();
+        assert!(!cached(66) && cached(77));
+        let (sha,): (Option<String>,) =
+            sqlx::query_as("SELECT sha256 FROM assets WHERE github_id = 66")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(sha, None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
