@@ -62,7 +62,7 @@
 		</div>
 		{#if project}
 			<div><DeviceList projectId={project.id} onchange={load} /></div>
-			<div><ReleaseList projectId={project.id} /></div>
+			<div><ReleaseList projectId={project.id} repo={project.repo} /></div>
 		{/if}
 	</section>
 

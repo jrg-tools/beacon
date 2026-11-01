@@ -121,6 +121,12 @@ async fn device_api() {
         (StatusCode::OK, b"hello".as_slice())
     );
     assert_eq!(headers["x-md5"], "bb");
+    let counters: (i64, i64) =
+        sqlx::query_as("SELECT checks, downloads FROM devices WHERE id = 'dev_1'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(counters, (2, 1));
 
     std::fs::remove_dir_all(dir).unwrap();
 }

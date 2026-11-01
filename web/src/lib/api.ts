@@ -1,4 +1,11 @@
-import type { Device, DeviceCredentials, Project, ProjectInput, Release } from './types.ts';
+import type {
+	Device,
+	DeviceCredentials,
+	Project,
+	ProjectInput,
+	ProjectStats,
+	Release
+} from './types.ts';
 
 /** Where the Rust server mounts the admin API (next to this app's `paths.base`). */
 const API = '/admin/api';
@@ -45,6 +52,7 @@ export const api = {
 	deleteProject: (id: number) => request<null>(`/projects/${id}`, send('DELETE')),
 	syncProject: (id: number) => request<null>(`/projects/${id}/sync`, send('POST')),
 	releases: (id: number) => request<Release[]>(`/projects/${id}/releases`),
+	stats: (id: number) => request<ProjectStats>(`/projects/${id}/stats`),
 	devices: (id: number) => request<Device[]>(`/projects/${id}/devices`),
 	createDevice: (id: number, name: string) =>
 		request<DeviceCredentials>(`/projects/${id}/devices`, send('POST', { name })),

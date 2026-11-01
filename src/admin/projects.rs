@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use axum::{
     Json,
     extract::{Path, State},
@@ -9,7 +11,7 @@ use serde_json::{Value, json};
 use super::project_input::ProjectInput;
 use crate::{
     error::{AppError, Result, status},
-    firmware::{cache, store, sync},
+    firmware::{cache, store, sync, version},
     state::{AppState, now},
 };
 
@@ -127,4 +129,32 @@ pub async fn releases(
         out.push(json!({ "tag": r.tag, "prerelease": r.prerelease, "published_at": r.published_at, "assets": assets }));
     }
     Ok(Json(out))
+}
+
+/// Fleet numbers for one project; per-device counters are in the device list.
+pub async fn stats(State(state): State<AppState>, Path(id): Path<i64>) -> Result<Json<Value>> {
+    let devices: Vec<(Option<String>, Option<i64>, i64, i64)> = sqlx::query_as(
+        "SELECT last_version, last_seen, checks, downloads FROM devices WHERE project_id = ?",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+    let latest = store::latest_release(&state.db, id, false).await?;
+    let day_ago = now() - 86400;
+    let mut versions = BTreeMap::<&str, i64>::new();
+    for (v, ..) in &devices {
+        *versions
+            .entry(v.as_deref().unwrap_or("unknown"))
+            .or_default() += 1;
+    }
+    Ok(Json(json!({
+        "devices": devices.len(),
+        "active_24h": devices.iter().filter(|d| d.1.is_some_and(|t| t > day_ago)).count(),
+        "up_to_date": latest.map_or(0, |(l, _)| {
+            devices.iter().filter(|d| !version::update_available(&l, d.0.as_deref())).count()
+        }),
+        "checks": devices.iter().map(|d| d.2).sum::<i64>(),
+        "downloads": devices.iter().map(|d| d.3).sum::<i64>(),
+        "versions": versions,
+    })))
 }

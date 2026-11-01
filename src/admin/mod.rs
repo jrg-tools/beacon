@@ -31,6 +31,7 @@ pub fn router(state: AppState, ui_dir: &Path) -> Router<AppState> {
         )
         .route("/projects/{id}/sync", post(projects::sync))
         .route("/projects/{id}/releases", get(projects::releases))
+        .route("/projects/{id}/stats", get(projects::stats))
         .route(
             "/projects/{id}/devices",
             get(devices::list).post(devices::create),

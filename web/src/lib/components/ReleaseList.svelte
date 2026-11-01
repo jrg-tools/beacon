@@ -3,7 +3,7 @@
 	import { date, size } from '#lib/format.ts';
 	import List from './List.svelte';
 
-	let { projectId }: { projectId: number } = $props();
+	let { projectId, repo }: { projectId: number; repo: string } = $props();
 	const releases = $derived(api.releases(projectId));
 </script>
 
@@ -16,7 +16,12 @@
 			{#snippet row(release)}
 				<div class="space-y-1 px-4 py-3">
 					<p class="flex flex-wrap items-center gap-2 font-semibold">
-						{release.tag}
+						<a
+							href="https://github.com/{repo}/releases/tag/{encodeURIComponent(release.tag)}"
+							target="_blank"
+							rel="noopener noreferrer"
+							class="hover:underline">{release.tag}</a
+						>
 						{#if release.prerelease}
 							<span
 								class="rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-500 dark:border-zinc-700"

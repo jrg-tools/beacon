@@ -1,19 +1,20 @@
 <script lang="ts">
 	import { api } from '#lib/api.ts';
 	import { ago } from '#lib/format.ts';
-	import type { Device, DeviceCredentials } from '#lib/types.ts';
+	import type { Device, DeviceCredentials, ProjectStats } from '#lib/types.ts';
 	import List from './List.svelte';
 
 	let { projectId, onchange }: { projectId: number; onchange: () => void } = $props();
 
 	let devices = $state<Device[]>([]);
+	let stats = $state<ProjectStats | null>(null);
 	let error = $state('');
 	let name = $state('');
 	let created = $state<DeviceCredentials | null>(null);
 
 	async function load() {
 		try {
-			devices = await api.devices(projectId);
+			[devices, stats] = await Promise.all([api.devices(projectId), api.stats(projectId)]);
 		} catch (err) {
 			error = (err as Error).message;
 		}
@@ -46,6 +47,24 @@
 
 <h2 class="mb-4 text-sm font-semibold text-zinc-500 uppercase">Devices · {devices.length}</h2>
 
+{#if stats?.devices}
+	<dl class="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+		{#each [['Active 24h', stats.active_24h], ['Up to date', stats.up_to_date], ['Checks', stats.checks], ['Downloads', stats.downloads]] as [label, value] (label)}
+			<div
+				class="rounded-2xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/60"
+			>
+				<dt class="text-xs text-zinc-500">{label}</dt>
+				<dd class="text-xl font-semibold">{value}</dd>
+			</div>
+		{/each}
+	</dl>
+	<p class="mb-4 text-xs text-zinc-500">
+		Versions: {Object.entries(stats.versions)
+			.map(([v, n]) => `${v} × ${n}`)
+			.join(' · ')}
+	</p>
+{/if}
+
 <form class="mb-4 flex gap-3" onsubmit={register}>
 	<input bind:value={name} required maxlength="100" class="field" placeholder="New device name" />
 	<button
@@ -74,7 +93,8 @@
 				<div class="min-w-0 flex-1">
 					<p class="truncate font-semibold">{device.name}</p>
 					<p class="truncate text-xs text-zinc-400">
-						{device.id} · {device.last_version ?? 'no version yet'} · seen {ago(device.last_seen)}
+						{device.id} · {device.last_version ?? 'no version yet'} · seen {ago(device.last_seen)} ·
+						{device.checks} checks · {device.downloads} downloads
 					</p>
 				</div>
 				<button class="action action-danger" onclick={() => revoke(device)}>Revoke</button>

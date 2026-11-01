@@ -18,6 +18,8 @@ pub struct DeviceRow {
     created_at: i64,
     last_seen: Option<i64>,
     last_version: Option<String>,
+    checks: i64,
+    downloads: i64,
 }
 
 pub async fn list(
@@ -25,7 +27,7 @@ pub async fn list(
     Path(project_id): Path<i64>,
 ) -> Result<Json<Vec<DeviceRow>>> {
     let rows = sqlx::query_as(
-        "SELECT id, name, created_at, last_seen, last_version FROM devices
+        "SELECT id, name, created_at, last_seen, last_version, checks, downloads FROM devices
          WHERE project_id = ? ORDER BY name",
     )
     .bind(project_id)

@@ -16,12 +16,16 @@ use crate::{
     state::{AppState, now},
 };
 
-async fn seen(state: &AppState, device: &Device, version: Option<&str>) -> Result<()> {
+/// Counts an update check (`check`) or an asset download.
+async fn seen(state: &AppState, device: &Device, version: Option<&str>, check: bool) -> Result<()> {
     sqlx::query(
-        "UPDATE devices SET last_seen = ?, last_version = COALESCE(?, last_version) WHERE id = ?",
+        "UPDATE devices SET last_seen = ?, last_version = COALESCE(?, last_version),
+           checks = checks + ?, downloads = downloads + ? WHERE id = ?",
     )
     .bind(now())
     .bind(version)
+    .bind(check as i64)
+    .bind(!check as i64)
     .bind(&device.id)
     .execute(&state.db)
     .await?;
@@ -55,7 +59,7 @@ pub async fn latest(
     Query(q): Query<LatestQuery>,
 ) -> Result<Json<Value>> {
     device.check_project(&project)?;
-    seen(&state, &device, q.current.as_deref()).await?;
+    seen(&state, &device, q.current.as_deref(), true).await?;
     let beta = q.channel.as_deref() == Some("beta");
     let (version, release) = store::latest_release(&state.db, device.project_id, beta)
         .await?
@@ -92,7 +96,7 @@ pub async fn download(
     Path((project, tag, name)): Path<(String, String, String)>,
 ) -> Result<Response> {
     device.check_project(&project)?;
-    seen(&state, &device, None).await?;
+    seen(&state, &device, None, false).await?;
     let asset = store::find_asset(&state.db, device.project_id, &tag, &name)
         .await?
         .ok_or(status(StatusCode::NOT_FOUND, "no such asset"))?;

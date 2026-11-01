@@ -36,6 +36,18 @@ export interface Device {
 	created_at: number;
 	last_seen: number | null;
 	last_version: string | null;
+	checks: number;
+	downloads: number;
+}
+
+export interface ProjectStats {
+	devices: number;
+	active_24h: number;
+	up_to_date: number;
+	checks: number;
+	downloads: number;
+	/** Device count per last reported version ("unknown" if none yet). */
+	versions: Record<string, number>;
 }
 
 /** Returned once, when a device is registered. */
