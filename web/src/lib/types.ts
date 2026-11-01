@@ -7,6 +7,8 @@ export interface Project {
 	emoji: string;
 	repo: string;
 	assets: string;
+	/** Files only the admin's first flash writes: "bootloader.bin@0x0,partitions.bin@0x8000". */
+	first_flash: string;
 	synced_at: number | null;
 	sync_error: string | null;
 	releases: number;
@@ -14,7 +16,10 @@ export interface Project {
 	latest: string | null;
 }
 
-export type ProjectInput = Pick<Project, 'slug' | 'name' | 'emoji' | 'repo' | 'assets'>;
+export type ProjectInput = Pick<
+	Project,
+	'slug' | 'name' | 'emoji' | 'repo' | 'assets' | 'first_flash'
+>;
 
 export interface Asset {
 	name: string;

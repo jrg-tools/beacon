@@ -31,6 +31,10 @@ pub fn router(state: AppState, ui_dir: &Path) -> Router<AppState> {
         )
         .route("/projects/{id}/sync", post(projects::sync))
         .route("/projects/{id}/releases", get(projects::releases))
+        .route(
+            "/projects/{id}/releases/{tag}/{asset}",
+            get(projects::download),
+        )
         .route("/projects/{id}/stats", get(projects::stats))
         .route(
             "/projects/{id}/devices",
@@ -163,6 +167,28 @@ mod tests {
         request(download).await;
         request("/api/v1/firmware/ab98/latest?current=v1.1.0").await;
         assert_eq!(status().await, (Some("failed".into()), 0, 1));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn first_flash_downloads_any_file() {
+        let (state, dir) = setup().await;
+        let download = |name: &str| {
+            let path = Path((1, "v1.2.0".to_string(), name.to_string()));
+            super::projects::download(State(state.clone()), path)
+        };
+        let res = download("bootloader.bin").await.ok().unwrap();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), b"boot");
+        assert!(download("nope.bin").await.is_err());
+        // Not a device download: the fleet's counters stay put.
+        let (downloads,): (i64,) = sqlx::query_as("SELECT downloads FROM devices")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(downloads, 0);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

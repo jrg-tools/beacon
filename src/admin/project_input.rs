@@ -15,6 +15,9 @@ pub struct ProjectInput {
     pub emoji: String,
     pub repo: String,
     pub assets: String,
+    /// Files only the first flash writes, at fixed offsets: "bootloader.bin@0x0, partitions.bin@0x8000".
+    #[serde(default)]
+    pub first_flash: String,
 }
 
 /// Letters, digits and `extra`; never only dots, so nothing reads as a path segment.
@@ -72,7 +75,27 @@ impl ProjectInput {
         if assets.is_empty() || !assets.iter().all(|a| safe(a, "-_.")) {
             return bad("assets: comma-separated file names");
         }
+        let mut first_flash = Vec::new();
+        for entry in self.first_flash.split(',').map(str::trim) {
+            if entry.is_empty() {
+                continue;
+            }
+            let parsed = entry.split_once('@').and_then(|(name, offset)| {
+                let offset = offset.trim().trim_start_matches("0x");
+                Some((name.trim(), u32::from_str_radix(offset, 16).ok()?))
+            });
+            // Flash is erased in 4 KB sectors, so a file must start on one.
+            let Some((name, offset)) = parsed.filter(|(n, o)| safe(n, "-_.") && o % 0x1000 == 0)
+            else {
+                return bad("first_flash: name@offset, offsets in hex on a 4 KB boundary");
+            };
+            if assets.contains(&name) {
+                return bad("first_flash: a file devices update with can't be first-flash only");
+            }
+            first_flash.push(format!("{name}@0x{offset:x}"));
+        }
         self.assets = assets.join(",");
+        self.first_flash = first_flash.join(",");
         Ok(self)
     }
 }
@@ -88,6 +111,7 @@ mod tests {
             emoji: emoji.into(),
             repo: repo.into(),
             assets: assets.into(),
+            first_flash: String::new(),
         }
     }
 
@@ -109,6 +133,26 @@ mod tests {
         assert!(input("../etc", "firmware.bin", "").validate().is_err());
         assert!(input("a/b", "x\"y.bin", "").validate().is_err());
         assert!(input("a/b", " , ", "").validate().is_err());
+    }
+
+    #[test]
+    fn validates_first_flash() {
+        let first_flash = |s: &str| {
+            let mut p = input("a/b", "firmware.bin", "");
+            p.first_flash = s.into();
+            p.validate().map(|p| p.first_flash)
+        };
+        assert_eq!(
+            first_flash(" bootloader.bin@0x0 , partitions.bin@8000, ")
+                .ok()
+                .as_deref(),
+            Some("bootloader.bin@0x0,partitions.bin@0x8000")
+        );
+        assert_eq!(first_flash("").ok().as_deref(), Some(""));
+        assert!(first_flash("bootloader.bin").is_err());
+        assert!(first_flash("bootloader.bin@0x10").is_err());
+        assert!(first_flash("bootloader.bin@zz").is_err());
+        assert!(first_flash("firmware.bin@0x10000").is_err());
     }
 
     #[test]

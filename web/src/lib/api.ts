@@ -20,7 +20,7 @@ export class ApiError extends Error {
 }
 
 /** Calls the Rust API, with the Clerk session token when signed in; errors carry the server's message. */
-async function json<T>(url: string, init: RequestInit = {}): Promise<T> {
+async function call(url: string, init: RequestInit = {}): Promise<Response> {
 	const token = await window.Clerk?.session?.getToken();
 	const res = await fetch(url, {
 		...init,
@@ -33,6 +33,11 @@ async function json<T>(url: string, init: RequestInit = {}): Promise<T> {
 		const body = await res.json().catch(() => ({}));
 		throw new ApiError(body.error ?? res.statusText, res.status);
 	}
+	return res;
+}
+
+async function json<T>(url: string, init?: RequestInit): Promise<T> {
+	const res = await call(url, init);
 	return (res.status === 202 || res.status === 204 ? null : await res.json()) as T;
 }
 
@@ -57,6 +62,11 @@ export const api = {
 	deleteProject: (id: number) => request<null>(`/projects/${id}`, send('DELETE')),
 	syncProject: (id: number) => request<null>(`/projects/${id}/sync`, send('POST')),
 	releases: (id: number) => request<Release[]>(`/projects/${id}/releases`),
+	/** Any release file, first-flash ones included (src/admin/projects.rs `download`). */
+	download: (id: number, tag: string, name: string) =>
+		call(`${API}/projects/${id}/releases/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`)
+			.then((res) => res.arrayBuffer())
+			.then((buffer) => new Uint8Array(buffer)),
 	stats: (id: number) => request<ProjectStats>(`/projects/${id}/stats`),
 	devices: (id: number) => request<Device[]>(`/projects/${id}/devices`),
 	createDevice: (id: number, name: string, publicKey: string) =>

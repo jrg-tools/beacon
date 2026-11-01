@@ -63,16 +63,14 @@ async fn seen(state: &AppState, device: &Device, what: Seen<'_>) -> Result<()> {
     Ok(())
 }
 
-async fn cached(state: &AppState, device: &Device, asset: AssetRow) -> Result<AssetRow> {
-    cache::ensure(state, &device.repo, asset)
-        .await
-        .map_err(|e| {
-            tracing::error!("{e:#}");
-            status(
-                StatusCode::BAD_GATEWAY,
-                "firmware not cached and GitHub unavailable",
-            )
-        })
+async fn cached(state: &AppState, repo: &str, asset: AssetRow) -> Result<AssetRow> {
+    cache::ensure(state, repo, asset).await.map_err(|e| {
+        tracing::error!("{e:#}");
+        status(
+            StatusCode::BAD_GATEWAY,
+            "firmware not cached and GitHub unavailable",
+        )
+    })
 }
 
 #[derive(Deserialize)]
@@ -99,7 +97,11 @@ pub async fn latest(
         .ok_or(status(StatusCode::NOT_FOUND, "no release"))?;
     let mut assets = Vec::new();
     for asset in store::release_assets(&state.db, release.id).await? {
-        let asset = cached(&state, &device, asset).await?;
+        // Bootloader and partition table: written once by the admin, never as an update.
+        if store::first_flash_names(&device.first_flash).any(|n| n == asset.name) {
+            continue;
+        }
+        let asset = cached(&state, &device.repo, asset).await?;
         let mut value = serde_json::to_value(&asset)?;
         value["url"] = format!(
             "/api/v1/firmware/{project}/releases/{}/{}",
@@ -134,8 +136,13 @@ pub async fn download(
         .ok_or(status(StatusCode::NOT_FOUND, "no such asset"))?;
     let bytes = asset.size;
     seen(&state, &device, Seen::Download { bytes, tag: &tag }).await?;
-    let asset = cached(&state, &device, asset).await?;
-    let file = tokio::fs::File::open(cache::path(&state, asset.github_id)).await?;
+    serve(&state, &device.repo, asset).await
+}
+
+/// The asset's file, fetched from GitHub first if it is not cached; also the admin's first flash.
+pub async fn serve(state: &AppState, repo: &str, asset: AssetRow) -> Result<Response> {
+    let asset = cached(state, repo, asset).await?;
+    let file = tokio::fs::File::open(cache::path(state, asset.github_id)).await?;
     let headers = [
         (header::CONTENT_TYPE, "application/octet-stream".to_string()),
         (header::CONTENT_LENGTH, asset.size.to_string()),

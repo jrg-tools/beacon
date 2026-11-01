@@ -27,6 +27,14 @@ pub struct AssetRow {
     pub md5: Option<String>,
 }
 
+/// The file names in a project's `first_flash` ("name@0xoffset,…").
+pub fn first_flash_names(first_flash: &str) -> impl Iterator<Item = &str> {
+    first_flash
+        .split(',')
+        .filter_map(|entry| entry.split_once('@'))
+        .map(|(name, _)| name)
+}
+
 pub async fn releases(db: &SqlitePool, project_id: i64) -> sqlx::Result<Vec<ReleaseRow>> {
     sqlx::query_as(
         "SELECT id, tag, prerelease, notes, published_at FROM releases

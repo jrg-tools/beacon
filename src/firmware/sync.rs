@@ -12,15 +12,17 @@ struct Project {
     id: i64,
     repo: String,
     assets: String,
+    first_flash: String,
 }
 
 /// Syncs one project and records the outcome on it, so the admin page can show failures.
 pub async fn project(state: &AppState, project_id: i64) -> anyhow::Result<()> {
     let _guard = state.sync_lock.lock().await;
-    let project: Project = sqlx::query_as("SELECT id, repo, assets FROM projects WHERE id = ?")
-        .bind(project_id)
-        .fetch_one(&state.db)
-        .await?;
+    let project: Project =
+        sqlx::query_as("SELECT id, repo, assets, first_flash FROM projects WHERE id = ?")
+            .bind(project_id)
+            .fetch_one(&state.db)
+            .await?;
     let result = run(state, &project).await;
     if let Err(e) = &result {
         tracing::warn!(repo = project.repo, "sync failed: {e:#}");
@@ -75,6 +77,7 @@ async fn run(state: &AppState, project: &Project) -> anyhow::Result<()> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
+    let first_flash: HashSet<&str> = store::first_flash_names(&project.first_flash).collect();
     let releases = state.github.releases(&project.repo).await?;
 
     let mut tx = state.db.begin().await?;
@@ -83,9 +86,11 @@ async fn run(state: &AppState, project: &Project) -> anyhow::Result<()> {
         let assets: Vec<_> = release
             .assets
             .iter()
-            .filter(|a| wanted.contains(a.name.as_str()))
+            .filter(|a| wanted.contains(a.name.as_str()) || first_flash.contains(a.name.as_str()))
             .collect();
-        if release.draft || assets.is_empty() || parse_version(&release.tag_name).is_none() {
+        // Only a release with something to update to counts, not one with just first-flash files.
+        let updatable = assets.iter().any(|a| wanted.contains(a.name.as_str()));
+        if release.draft || !updatable || parse_version(&release.tag_name).is_none() {
             continue;
         }
         upsert_release(&mut tx, project.id, release, &assets).await?;

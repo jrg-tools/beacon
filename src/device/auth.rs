@@ -27,6 +27,7 @@ pub struct Device {
     pub project_id: i64,
     pub slug: String,
     pub repo: String,
+    pub first_flash: String,
     public_key: String,
 }
 
@@ -75,7 +76,7 @@ pub async fn authenticate(
         ));
     }
     let device: Device = sqlx::query_as(
-        "SELECT d.id, d.project_id, p.slug, p.repo, d.public_key FROM devices d
+        "SELECT d.id, d.project_id, p.slug, p.repo, p.first_flash, d.public_key FROM devices d
          JOIN projects p ON p.id = d.project_id WHERE d.id = ?",
     )
     .bind(id)

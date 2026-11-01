@@ -77,6 +77,9 @@
 				</div>
 				<a href="{resolve('/admin')}?project={project.id}" class="action">Edit</a>
 				<a href={resolve('/firmware/[slug]', { slug: project.slug })} class="action">Install</a>
+				<a href={resolve('/admin/project/[slug]/flash', { slug: project.slug })} class="action"
+					>First flash</a
+				>
 			</header>
 		{/if}
 	</div>

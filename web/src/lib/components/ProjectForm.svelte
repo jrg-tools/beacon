@@ -16,7 +16,8 @@
 		emoji: project?.emoji ?? '📡',
 		slug: project?.slug ?? '',
 		repo: project?.repo ?? '',
-		assets: project?.assets ?? ''
+		assets: project?.assets ?? '',
+		first_flash: project?.first_flash ?? ''
 	});
 
 	let saving = $state(false);
@@ -95,6 +96,20 @@
 		/>
 		<span class="text-xs text-zinc-500">
 			Release files devices download, comma-separated. Only semver tags with one of them count.
+		</span>
+	</label>
+
+	<label class="block space-y-1.5">
+		<span class="text-sm font-semibold">First flash only</span>
+		<input
+			bind:value={draft.first_flash}
+			class="field"
+			placeholder="bootloader.bin@0x0, partitions.bin@0x8000"
+			aria-invalid={invalid('first_flash')}
+		/>
+		<span class="text-xs text-zinc-500">
+			Release files a blank board needs, as name@offset (hex): written by the first flash, never
+			sent as an update. The partition table among them places the assets.
 		</span>
 	</label>
 

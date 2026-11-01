@@ -33,6 +33,7 @@ pub struct ProjectRow {
     emoji: String,
     repo: String,
     assets: String,
+    first_flash: String,
     synced_at: Option<i64>,
     sync_error: Option<String>,
     releases: i64,
@@ -43,7 +44,7 @@ pub struct ProjectRow {
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ProjectRow>>> {
     let mut rows: Vec<ProjectRow> = sqlx::query_as(
-        "SELECT p.id, p.slug, p.name, p.emoji, p.repo, p.assets, p.synced_at, p.sync_error,
+        "SELECT p.id, p.slug, p.name, p.emoji, p.repo, p.assets, p.first_flash, p.synced_at, p.sync_error,
            (SELECT COUNT(*) FROM releases WHERE project_id = p.id) AS releases,
            (SELECT COUNT(*) FROM devices WHERE project_id = p.id) AS devices
          FROM projects p ORDER BY p.name",
@@ -64,7 +65,8 @@ pub async fn create(
 ) -> Result<Json<Value>> {
     let p = input.validate()?;
     let (id,): (i64,) = sqlx::query_as(
-        "INSERT INTO projects (slug, name, emoji, repo, assets, created_at) VALUES (?, ?, ?, ?, ?, ?)
+        "INSERT INTO projects (slug, name, emoji, repo, assets, first_flash, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&p.slug)
@@ -72,6 +74,7 @@ pub async fn create(
     .bind(&p.emoji)
     .bind(&p.repo)
     .bind(&p.assets)
+    .bind(&p.first_flash)
     .bind(now())
     .fetch_one(&state.db)
     .await
@@ -87,13 +90,15 @@ pub async fn update(
 ) -> Result<StatusCode> {
     let p = input.validate()?;
     let done = sqlx::query(
-        "UPDATE projects SET slug = ?, name = ?, emoji = ?, repo = ?, assets = ? WHERE id = ?",
+        "UPDATE projects SET slug = ?, name = ?, emoji = ?, repo = ?, assets = ?, first_flash = ?
+         WHERE id = ?",
     )
     .bind(&p.slug)
     .bind(&p.name)
     .bind(&p.emoji)
     .bind(&p.repo)
     .bind(&p.assets)
+    .bind(&p.first_flash)
     .bind(id)
     .execute(&state.db)
     .await
@@ -117,6 +122,23 @@ pub async fn remove(State(state): State<AppState>, Path(id): Path<i64>) -> Resul
 pub async fn sync(State(state): State<AppState>, Path(id): Path<i64>) -> StatusCode {
     sync::spawn(state, id);
     StatusCode::ACCEPTED
+}
+
+/// Any file of a release, first-flash ones included: the admin's first flash downloads them here,
+/// as a board would from the device API but without counting as a device download.
+pub async fn download(
+    State(state): State<AppState>,
+    Path((id, tag, name)): Path<(i64, String, String)>,
+) -> Result<axum::response::Response> {
+    let (repo,): (String,) = sqlx::query_as("SELECT repo FROM projects WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(status(StatusCode::NOT_FOUND, "no such project"))?;
+    let asset = store::find_asset(&state.db, id, &tag, &name)
+        .await?
+        .ok_or(status(StatusCode::NOT_FOUND, "no such asset"))?;
+    crate::device::serve(&state, &repo, asset).await
 }
 
 pub async fn releases(

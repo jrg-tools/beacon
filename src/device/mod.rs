@@ -7,6 +7,7 @@ use axum::{Router, middleware, routing::get};
 
 #[cfg(test)]
 pub use auth::message;
+pub use handlers::serve;
 
 use crate::state::AppState;
 

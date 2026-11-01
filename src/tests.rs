@@ -15,12 +15,13 @@ use crate::{
     state::{AppState, State, now},
 };
 
-const FIXTURES: [&str; 6] = [
-    "INSERT INTO projects (id, slug, name, repo, assets, created_at) VALUES (1, 'ab98', 'AB98', 'o/ab98', 'firmware.bin', 0)",
+const FIXTURES: [&str; 7] = [
+    "INSERT INTO projects (id, slug, name, repo, assets, first_flash, created_at) VALUES (1, 'ab98', 'AB98', 'o/ab98', 'firmware.bin', 'bootloader.bin@0x0', 0)",
     "INSERT INTO projects (id, slug, name, repo, assets, created_at) VALUES (2, 'cam', 'Cam', 'o/cam', 'firmware.bin', 0)",
     "INSERT INTO releases (id, project_id, tag, prerelease, notes, published_at) VALUES (1, 1, 'v1.2.0', 0, 'n', '')",
     "INSERT INTO releases (id, project_id, tag, prerelease, notes, published_at) VALUES (2, 1, 'v1.3.0-rc1', 1, 'n', '')",
     "INSERT INTO assets (release_id, name, github_id, size, sha256, md5) VALUES (1, 'firmware.bin', 77, 5, 'aa', 'bb')",
+    "INSERT INTO assets (release_id, name, github_id, size, sha256, md5) VALUES (1, 'bootloader.bin', 78, 4, 'cc', 'dd')",
     "INSERT INTO devices (id, project_id, name, created_at) VALUES ('dev_1', 1, 'desk', 0)",
 ];
 
@@ -36,6 +37,7 @@ pub(crate) async fn setup() -> (AppState, PathBuf) {
     std::fs::create_dir_all(&cache_dir).unwrap();
     std::fs::create_dir_all(&ui_dir).unwrap();
     std::fs::write(cache_dir.join("77.bin"), b"hello").unwrap();
+    std::fs::write(cache_dir.join("78.bin"), b"boot").unwrap();
     std::fs::write(ui_dir.join("index.html"), "<!doctype html>admin").unwrap();
     let db = db::open(&dir.join("t.db")).await.unwrap();
     for sql in FIXTURES {
@@ -100,8 +102,11 @@ async fn device_api() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["update_available"], true);
     assert_eq!(json["latest"]["tag"], "v1.2.0"); // the rc is beta-only
+    // The first-flash bootloader is never offered as an update.
+    let assets = json["latest"]["assets"].as_array().unwrap();
+    assert_eq!(assets.len(), 1);
     assert_eq!(
-        json["latest"]["assets"][0]["url"],
+        assets[0]["url"],
         "/api/v1/firmware/ab98/releases/v1.2.0/firmware.bin"
     );
     let (seen,): (Option<String>,) =
@@ -161,10 +166,12 @@ async fn device_api_rejects_bad_signatures() {
 #[tokio::test]
 async fn admin_routes() {
     let (state, dir) = setup().await;
-    assert_eq!(
-        call(&state, get("/admin/api/projects")).await.0,
-        StatusCode::UNAUTHORIZED
-    );
+    for path in [
+        "/admin/api/projects",
+        "/admin/api/projects/1/releases/v1.2.0/bootloader.bin",
+    ] {
+        assert_eq!(call(&state, get(path)).await.0, StatusCode::UNAUTHORIZED);
+    }
     assert_eq!(
         call(&state, get("/admin/api/nope")).await.0,
         StatusCode::NOT_FOUND

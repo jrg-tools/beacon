@@ -66,6 +66,18 @@ signed `latest` check, so the update shows as succeeded. The computer's clock mu
 of the server's, like the board's. Boards on firmware older than `beacon sign` need one update over
 the air or with PlatformIO first.
 
+### First flash
+
+A blank or bricked board has no app to answer, so **First flash** on the project page
+(`/admin/project/<slug>/flash`, admins only) does it differently. The project's **First flash only**
+field lists release files at fixed offsets, e.g. `bootloader.bin@0x0, partitions.bin@0x8000` (the
+bootloader goes at `0x1000` on the original ESP32). They are mirrored like the assets but never sent as
+an update: not in `latest`, not on the install page. The page downloads every file of the release
+through `GET /admin/api/projects/{id}/releases/{tag}/{asset}` (not a device download), reads the
+partition table from whichever first-flash file is one, places the app and filesystem with it as an
+install does, erases the whole flash and writes everything. Then it waits for `beacon info`; register
+the board with **Sync device** afterwards.
+
 ## Device API
 
 Every request carries three headers, signed with the device's Ed25519 private key. The device makes
