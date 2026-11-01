@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { api } from '#lib/api.ts';
 	import { ago, day } from '#lib/format.ts';
-	import type { Device, DeviceCredentials } from '#lib/types.ts';
+	import { connect, hasSerial } from '#lib/serial.ts';
+	import type { Device } from '#lib/types.ts';
 	import BarChart from './BarChart.svelte';
 	import List from './List.svelte';
 
@@ -10,7 +11,8 @@
 	let devices = $state<Device[]>([]);
 	let error = $state('');
 	let name = $state('');
-	let created = $state<DeviceCredentials | null>(null);
+	let synced = $state<{ name: string; id: string } | null>(null);
+	let syncing = $state(false);
 
 	async function load() {
 		try {
@@ -20,20 +22,40 @@
 		}
 	}
 	$effect(() => {
-		created = null; // a secret belongs to the project it was made for
+		synced = null; // it belongs to the project it was made for
 		load();
 	});
 
-	async function register(e: SubmitEvent) {
+	// The board makes its own key pair and hands over only the public key, so the private key never
+	// leaves it. Each sync gets a fresh nonce, so resending keygen can't swap the key mid-sync.
+	async function sync(e: SubmitEvent) {
 		e.preventDefault();
 		error = '';
+		synced = null;
+		syncing = true;
+		let board: Awaited<ReturnType<typeof connect>> | undefined;
 		try {
-			created = await api.createDevice(projectId, name);
-			name = '';
+			board = await connect();
+			const nonce = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) =>
+				b.toString(16).padStart(2, '0')
+			).join('');
+			const publicKey = await board.ask(`beacon keygen ${nonce}`, `beacon:pubkey ${nonce} `);
+			const { id } = await api.createDevice(projectId, name, publicKey);
 			await load();
 			onchange();
+			await board.ask(`beacon id ${id}`, `beacon:ok ${id}`).catch(() => {
+				throw new Error(
+					`Registered ${id}, but the device did not save it: revoke it and sync again.`
+				);
+			});
+			synced = { name, id };
+			name = '';
 		} catch (err) {
-			error = (err as Error).message;
+			// Closing the port picker is not an error.
+			if ((err as Error).name !== 'NotFoundError') error = (err as Error).message;
+		} finally {
+			await board?.close();
+			syncing = false;
 		}
 	}
 
@@ -62,24 +84,24 @@
 
 <h2 class="mb-4 text-sm font-semibold text-zinc-500 uppercase">Devices · {devices.length}</h2>
 
-<form class="mb-4 flex gap-3" onsubmit={register}>
+<form class="mb-4 flex gap-3" onsubmit={sync}>
 	<input bind:value={name} required maxlength="100" class="field" placeholder="New device name" />
 	<button
-		class="shrink-0 cursor-pointer rounded-lg bg-yellow-400 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-yellow-300"
-		>Register</button
+		disabled={syncing || !hasSerial()}
+		class="shrink-0 cursor-pointer rounded-lg bg-yellow-400 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
+		>{syncing ? 'Syncing…' : 'Sync device'}</button
 	>
 </form>
+{#if !hasSerial()}
+	<p class="mb-4 text-xs text-zinc-500">
+		Syncing talks to the device over USB, which needs Chrome or Edge on a computer.
+	</p>
+{/if}
 
-{#if created}
-	<!-- jrg-life's notice style (its sign-in "no access" box). -->
-	<div
-		class="mb-4 space-y-1 rounded-lg border border-yellow-500/40 bg-yellow-400/10 px-4 py-3 text-sm"
-		role="status"
-	>
-		<p class="font-semibold">Flash these into the device now: the secret is not shown again.</p>
-		<p class="text-xs">Device id <code class="break-all select-all">{created.id}</code></p>
-		<p class="text-xs">Secret <code class="break-all select-all">{created.secret}</code></p>
-	</div>
+{#if synced}
+	<p class="mb-4 text-sm text-emerald-600" role="status">
+		{synced.name} is registered as <code>{synced.id}</code>. Its private key stays on the device.
+	</p>
 {/if}
 {#if error}<p class="mb-4 text-sm font-semibold text-red-600" role="alert">{error}</p>{/if}
 
@@ -129,5 +151,5 @@
 		{/snippet}
 	</List>
 {:else}
-	<p class="text-xs text-zinc-500">No devices yet: register one, then flash its id and secret.</p>
+	<p class="text-xs text-zinc-500">No devices yet: plug one in over USB, name it and sync it.</p>
 {/if}

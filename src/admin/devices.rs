@@ -1,3 +1,4 @@
+use aws_lc_rs::signature::{ED25519, ParsedPublicKey};
 use axum::{
     Json,
     extract::{Path, State},
@@ -117,9 +118,10 @@ pub async fn list(
 #[derive(Deserialize)]
 pub struct DeviceInput {
     name: String,
+    /// The device's Ed25519 public key (hex). The device makes its own key pair, so the private key never leaves it.
+    public_key: String,
 }
 
-/// The secret is returned once, here; the page tells the admin to flash it now.
 pub async fn create(
     State(state): State<AppState>,
     Path(project_id): Path<i64>,
@@ -130,14 +132,22 @@ pub async fn create(
         return Err(status(StatusCode::BAD_REQUEST, "name is required"));
     }
     let id = format!("dev_{}", hex::encode(rand::random::<[u8; 8]>()));
-    let secret = hex::encode(rand::random::<[u8; 32]>());
+    let public_key = hex::decode(input.public_key.trim())
+        .ok()
+        .filter(|key| ParsedPublicKey::new(&ED25519, key).is_ok())
+        .ok_or_else(|| {
+            status(
+                StatusCode::BAD_REQUEST,
+                "public_key must be an Ed25519 key in hex",
+            )
+        })?;
     let done = sqlx::query(
-        "INSERT INTO devices (id, project_id, name, secret, created_at)
+        "INSERT INTO devices (id, project_id, name, public_key, created_at)
          SELECT ?, id, ?, ?, ? FROM projects WHERE id = ?",
     )
     .bind(&id)
     .bind(name)
-    .bind(&secret)
+    .bind(hex::encode(public_key))
     .bind(now())
     .bind(project_id)
     .execute(&state.db)
@@ -145,7 +155,7 @@ pub async fn create(
     if done.rows_affected() == 0 {
         return Err(status(StatusCode::NOT_FOUND, "no such project"));
     }
-    Ok(Json(json!({ "id": id, "secret": secret })))
+    Ok(Json(json!({ "id": id })))
 }
 
 pub async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode> {

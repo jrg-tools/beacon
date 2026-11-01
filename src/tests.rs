@@ -2,12 +2,12 @@
 
 use std::path::PathBuf;
 
+use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair};
 use axum::{
     body::Body,
     http::{HeaderMap, Request, StatusCode},
 };
 use base64::Engine;
-use hmac::Mac;
 use tower::ServiceExt;
 
 use crate::{
@@ -21,8 +21,11 @@ const FIXTURES: [&str; 6] = [
     "INSERT INTO releases (id, project_id, tag, prerelease, notes, published_at) VALUES (1, 1, 'v1.2.0', 0, 'n', '')",
     "INSERT INTO releases (id, project_id, tag, prerelease, notes, published_at) VALUES (2, 1, 'v1.3.0-rc1', 1, 'n', '')",
     "INSERT INTO assets (release_id, name, github_id, size, sha256, md5) VALUES (1, 'firmware.bin', 77, 5, 'aa', 'bb')",
-    "INSERT INTO devices (id, project_id, name, secret, created_at) VALUES ('dev_1', 1, 'desk', 's3cret', 0)",
+    "INSERT INTO devices (id, project_id, name, created_at) VALUES ('dev_1', 1, 'desk', 0)",
 ];
+
+/// dev_1's private key.
+pub(crate) const KEY: [u8; 32] = [1; 32];
 
 pub(crate) async fn setup() -> (AppState, PathBuf) {
     let dir = std::env::temp_dir().join(format!(
@@ -38,6 +41,11 @@ pub(crate) async fn setup() -> (AppState, PathBuf) {
     for sql in FIXTURES {
         sqlx::query(sql).execute(&db).await.unwrap();
     }
+    sqlx::query("UPDATE devices SET public_key = ? WHERE id = 'dev_1'")
+        .bind(hex::encode(pair(KEY).public_key()))
+        .execute(&db)
+        .await
+        .unwrap();
     let http = reqwest::Client::new();
     let pk = format!(
         "pk_test_{}",
@@ -51,12 +59,12 @@ pub(crate) async fn setup() -> (AppState, PathBuf) {
     (State::new(db, http, github, clerk, cache_dir, ui_dir), dir)
 }
 
-pub(crate) fn signed(path: &str, secret: &str, ts: i64) -> Request<Body> {
-    let sig = hex::encode(
-        device::signature(secret, ts, "GET", path)
-            .finalize()
-            .into_bytes(),
-    );
+fn pair(key: [u8; 32]) -> Ed25519KeyPair {
+    Ed25519KeyPair::from_seed_unchecked(&key).unwrap()
+}
+
+pub(crate) fn signed(path: &str, key: [u8; 32], ts: i64) -> Request<Body> {
+    let sig = hex::encode(pair(key).sign(device::message(ts, "GET", path).as_bytes()));
     Request::get(path)
         .header("x-beacon-device", "dev_1")
         .header("x-beacon-timestamp", ts.to_string())
@@ -85,11 +93,7 @@ async fn device_api() {
 
     let (code, _, body) = call(
         &state,
-        signed(
-            "/api/v1/firmware/ab98/latest?current=v1.1.0",
-            "s3cret",
-            now(),
-        ),
+        signed("/api/v1/firmware/ab98/latest?current=v1.1.0", KEY, now()),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
@@ -109,13 +113,13 @@ async fn device_api() {
 
     let (_, _, body) = call(
         &state,
-        signed("/api/v1/firmware/ab98/latest?channel=beta", "s3cret", now()),
+        signed("/api/v1/firmware/ab98/latest?channel=beta", KEY, now()),
     )
     .await;
     assert!(String::from_utf8(body).unwrap().contains("v1.3.0-rc1"));
 
     let path = "/api/v1/firmware/ab98/releases/v1.2.0/firmware.bin";
-    let (code, headers, body) = call(&state, signed(path, "s3cret", now())).await;
+    let (code, headers, body) = call(&state, signed(path, KEY, now())).await;
     assert_eq!(
         (code, body.as_slice()),
         (StatusCode::OK, b"hello".as_slice())
@@ -136,20 +140,20 @@ async fn device_api_rejects_bad_signatures() {
     let (state, dir) = setup().await;
     let latest = "/api/v1/firmware/ab98/latest";
     assert_eq!(
-        call(&state, signed(latest, "wrong", now())).await.0,
+        call(&state, signed(latest, [2; 32], now())).await.0,
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        call(&state, signed(latest, "s3cret", now() - 3600)).await.0,
+        call(&state, signed(latest, KEY, now() - 3600)).await.0,
         StatusCode::UNAUTHORIZED
     );
     // A signature is only good for the exact path and query it was made for.
-    let mut req = signed(latest, "s3cret", now());
+    let mut req = signed(latest, KEY, now());
     *req.uri_mut() = format!("{latest}?channel=beta").parse().unwrap();
     assert_eq!(call(&state, req).await.0, StatusCode::UNAUTHORIZED);
     assert_eq!(call(&state, get(latest)).await.0, StatusCode::UNAUTHORIZED);
     // A device key only opens its own project.
-    let other = signed("/api/v1/firmware/cam/latest", "s3cret", now());
+    let other = signed("/api/v1/firmware/cam/latest", KEY, now());
     assert_eq!(call(&state, other).await.0, StatusCode::FORBIDDEN);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -13,7 +13,7 @@ request. An admin UI behind Clerk manages projects and devices.
 | ------------------------ | ------------------------------------------------------------------- |
 | `app.rs`                 | Router: `/api/v1/firmware` (devices), `/admin` (UI + admin API)     |
 | `config.rs`, `state.rs`  | Environment settings; shared state                                  |
-| `device/auth.rs`         | HMAC signature check on every device request                        |
+| `device/auth.rs`         | Ed25519 signature check on every device request                     |
 | `device/handlers.rs`     | `latest` and `download`                                             |
 | `firmware/version.rs`    | Semver: which release is newest, whether an update is available     |
 | `firmware/store.rs`      | Release and asset queries                                           |
@@ -23,15 +23,32 @@ request. An admin UI behind Clerk manages projects and devices.
 | `admin/clerk.rs`         | Clerk session tokens (JWKS) and roles                               |
 | `admin/projects.rs`, `admin/devices.rs` | Admin API                                            |
 
+## Registering a device
+
+Plug the board in over USB, enter a name on the project page and click **Sync device** (Web Serial,
+so Chrome or Edge on a computer). The page talks to the firmware one line at a time, and the
+firmware's replies start with `beacon:` amid its log:
+
+```
+> beacon keygen <nonce>     < beacon:pubkey <nonce> <public key hex>
+> beacon id <dev_...>       < beacon:ok <dev_...>
+```
+
+`keygen` makes a new key pair on the board and stores the private key; a resend with the same nonce
+gets the same key, so the page retries safely if opening the port reset the board. The page then
+registers the public key (`POST /admin/api/projects/{id}/devices {name, public_key}`, admin only)
+and sends the device the id it gets back. Firmware side: `src/network/BeaconSerial.cpp` in AB98 and
+mayanhcu.
+
 ## Device API
 
-Every request carries three headers, signed with the device's secret (shown once when it is registered
-in the admin UI):
+Every request carries three headers, signed with the device's Ed25519 private key. The device makes
+that key itself and never shares it; the server keeps only the public key.
 
 ```
 X-Beacon-Device:    dev_0123456789abcdef
 X-Beacon-Timestamp: 1793412161                       # unix seconds, ±5 min: set the clock over NTP
-X-Beacon-Signature: hex(HMAC-SHA256(secret, "<timestamp>\n<METHOD>\n<path?query>"))
+X-Beacon-Signature: hex(Ed25519(private key, "<timestamp>\n<METHOD>\n<path?query>"))
 ```
 
 The signature covers the exact path and query sent. A wrong signature, unknown device or stale clock
@@ -64,16 +81,16 @@ The existing `OtaUpdater` needs three changes: point it at Beacon instead of the
 `latest.assets[].url`, and sign each request in the header callback it already passes to `HTTPUpdate`:
 
 ```cpp
-#include <mbedtls/md.h>
+#include <Ed25519.h>  // rweather/Crypto
 
-String beaconSignature(const char* secret, long ts, const char* method, const String& pathQuery) {
+// BEACON_PRIVATE_KEY is the 64 hex characters from the admin UI, decoded to 32 bytes.
+String beaconSignature(const uint8_t privateKey[32], long ts, const char* method, const String& pathQuery) {
   const String message = String(ts) + "\n" + method + "\n" + pathQuery;
-  uint8_t mac[32];
-  mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
-                  reinterpret_cast<const uint8_t*>(secret), strlen(secret),
-                  reinterpret_cast<const uint8_t*>(message.c_str()), message.length(), mac);
-  char hex[65];
-  for (int i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", mac[i]);
+  uint8_t publicKey[32], sig[64];
+  Ed25519::derivePublicKey(publicKey, privateKey);
+  Ed25519::sign(sig, privateKey, publicKey, message.c_str(), message.length());
+  char hex[129];
+  for (int i = 0; i < 64; i++) sprintf(hex + 2 * i, "%02x", sig[i]);
   return String(hex);
 }
 
@@ -81,7 +98,7 @@ void addBeaconHeaders(HTTPClient* http, const String& pathQuery) {
   const long ts = time(nullptr);  // configTime() must have synced
   http->addHeader("X-Beacon-Device", BEACON_DEVICE_ID);
   http->addHeader("X-Beacon-Timestamp", String(ts));
-  http->addHeader("X-Beacon-Signature", beaconSignature(BEACON_SECRET, ts, "GET", pathQuery));
+  http->addHeader("X-Beacon-Signature", beaconSignature(BEACON_PRIVATE_KEY, ts, "GET", pathQuery));
 }
 ```
 

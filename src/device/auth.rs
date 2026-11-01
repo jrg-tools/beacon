@@ -1,16 +1,16 @@
 //! Every device request is signed with that device's own key.
 //!
 //! Headers: `X-Beacon-Device: <id>`, `X-Beacon-Timestamp: <unix seconds>`,
-//! `X-Beacon-Signature: hex(HMAC-SHA256(secret, "<timestamp>\n<METHOD>\n<path?query>"))`.
+//! `X-Beacon-Signature: hex(Ed25519(private key, "<timestamp>\n<METHOD>\n<path?query>"))`.
+//! The server stores only the public key.
 
+use aws_lc_rs::signature::{ED25519, UnparsedPublicKey};
 use axum::{
     extract::{OriginalUri, Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::Response,
 };
-use hmac::{Hmac, KeyInit, Mac};
-use sha2::Sha256;
 
 use crate::{
     error::{Result, status},
@@ -27,7 +27,7 @@ pub struct Device {
     pub project_id: i64,
     pub slug: String,
     pub repo: String,
-    secret: String,
+    public_key: String,
 }
 
 impl Device {
@@ -44,11 +44,9 @@ impl Device {
     }
 }
 
-pub fn signature(secret: &str, timestamp: i64, method: &str, path_and_query: &str) -> Hmac<Sha256> {
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC takes any key length");
-    mac.update(format!("{timestamp}\n{method}\n{path_and_query}").as_bytes());
-    mac
+/// The bytes a device signs.
+pub fn message(timestamp: i64, method: &str, path_and_query: &str) -> String {
+    format!("{timestamp}\n{method}\n{path_and_query}")
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -77,7 +75,7 @@ pub async fn authenticate(
         ));
     }
     let device: Device = sqlx::query_as(
-        "SELECT d.id, d.project_id, p.slug, p.repo, d.secret FROM devices d
+        "SELECT d.id, d.project_id, p.slug, p.repo, d.public_key FROM devices d
          JOIN projects p ON p.id = d.project_id WHERE d.id = ?",
     )
     .bind(id)
@@ -90,9 +88,12 @@ pub async fn authenticate(
         .get::<OriginalUri>()
         .map_or(req.uri(), |o| &o.0);
     let path = uri.path_and_query().map_or("/", |p| p.as_str());
-    // verify_slice compares in constant time.
-    signature(&device.secret, timestamp, req.method().as_str(), path)
-        .verify_slice(&sig)
+    let key = hex::decode(&device.public_key).map_err(|_| denied())?;
+    UnparsedPublicKey::new(&ED25519, key)
+        .verify(
+            message(timestamp, req.method().as_str(), path).as_bytes(),
+            &sig,
+        )
         .map_err(|_| denied())?;
     req.extensions_mut().insert(device);
     Ok(next.run(req).await)

@@ -81,9 +81,3 @@ export interface ProjectStats {
 	/** The last 30 days, oldest first. */
 	days: StatsDay[];
 }
-
-/** Returned once, when a device is registered. */
-export interface DeviceCredentials {
-	id: string;
-	secret: string;
-}

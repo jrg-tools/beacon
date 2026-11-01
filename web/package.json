@@ -12,7 +12,6 @@
 		"format": "prettier --write ."
 	},
 	"devDependencies": {
-		"@clerk/shared": "^4.41.1",
 		"@eslint/js": "^10.0.1",
 		"@sveltejs/adapter-static": "^4.0.1",
 		"@sveltejs/kit": "^3.1.0",

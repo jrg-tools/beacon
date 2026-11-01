@@ -56,7 +56,7 @@ mod tests {
 
     use crate::{
         state::now,
-        tests::{call, setup, signed},
+        tests::{KEY, call, setup, signed},
     };
 
     #[tokio::test]
@@ -67,7 +67,7 @@ mod tests {
             "/api/v1/firmware/ab98/releases/v1.2.0/firmware.bin",
             "/api/v1/firmware/ab98/latest?current=v1.2.0&channel=beta",
         ] {
-            call(&state, signed(path, "s3cret", now())).await;
+            call(&state, signed(path, KEY, now())).await;
         }
 
         let stats = super::projects::stats(State(state.clone()), Path(1))
@@ -122,7 +122,7 @@ mod tests {
         let (state, dir) = setup().await;
         let request = |path: &'static str| {
             let state = state.clone();
-            async move { call(&state, signed(path, "s3cret", now())).await }
+            async move { call(&state, signed(path, KEY, now())).await }
         };
         let status = || async {
             let devices = super::devices::list(State(state.clone()), Path(1))
@@ -161,6 +161,34 @@ mod tests {
         request(download).await;
         request("/api/v1/firmware/ab98/latest?current=v1.1.0").await;
         assert_eq!(status().await, (Some("failed".into()), 0, 1));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn registered_key_signs_in() {
+        let (state, dir) = setup().await;
+        // The device's key pair; only its public half reaches Beacon.
+        let key = [7; 32];
+        let public_key = aws_lc_rs::signature::Ed25519KeyPair::from_seed_unchecked(&key).unwrap();
+        let create = |public_key: String| {
+            let input = serde_json::from_value(
+                serde_json::json!({ "name": "new", "public_key": public_key }),
+            );
+            super::devices::create(State(state.clone()), Path(1), axum::Json(input.unwrap()))
+        };
+        assert!(create("not hex".into()).await.is_err());
+        assert!(create("00".into()).await.is_err());
+        let created = create(hex::encode(aws_lc_rs::signature::KeyPair::public_key(
+            &public_key,
+        )))
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        let mut req = signed("/api/v1/firmware/ab98/latest", key, now());
+        let id = created["id"].as_str().unwrap().parse().unwrap();
+        req.headers_mut().insert("x-beacon-device", id);
+        assert_eq!(call(&state, req).await.0, axum::http::StatusCode::OK);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

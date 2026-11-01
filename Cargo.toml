@@ -5,20 +5,20 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
-axum = "0.8.9"
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "original-uri", "tokio", "tracing"] }
 base64 = "0.23.1"
 hex = "0.4.3"
-hmac = "0.13.0"
+aws-lc-rs = { version = "1.19.0", default-features = false, features = ["aws-lc-sys"] }
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
-md-5 = "0.11.0"
-rand = "0.10.3"
+md-5 = { version = "0.11.0", default-features = false }
+rand = { version = "0.10.3", default-features = false, features = ["thread_rng"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2", "json"] }
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-sha2 = "0.11.1"
+sha2 = { version = "0.11.1", default-features = false }
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite-bundled", "migrate", "macros"] }
-tokio = { version = "1.54.1", features = ["full"] }
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "fs", "io-util", "net", "signal", "sync", "time"] }
 tokio-util = { version = "0.7.20", features = ["io"] }
 tower-http = { version = "0.7.1", features = ["trace", "set-header", "fs"] }
 tracing = "0.1.44"

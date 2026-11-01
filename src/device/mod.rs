@@ -6,7 +6,7 @@ mod handlers;
 use axum::{Router, middleware, routing::get};
 
 #[cfg(test)]
-pub use auth::signature;
+pub use auth::message;
 
 use crate::state::AppState;
 
