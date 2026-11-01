@@ -173,11 +173,18 @@ async fn admin_routes() {
     assert_eq!(code, StatusCode::OK);
     assert!(String::from_utf8(body).unwrap().contains("pk_test_"));
     // The SPA: its index for the root and for client-side routes.
-    for path in ["/admin", "/admin/projects/1"] {
+    for path in [
+        "/admin",
+        "/admin/project/ab98",
+        "/firmware/ab98",
+        "/index.html",
+    ] {
         let (code, _, body) = call(&state, get(path)).await;
         assert_eq!((path, code), (path, StatusCode::OK));
         assert!(String::from_utf8(body).unwrap().contains("admin"));
     }
+    // Only the UI's pages fall back to it.
+    assert_eq!(call(&state, get("/nope")).await.0, StatusCode::NOT_FOUND);
     let (code, headers, _) = call(&state, get("/admin/")).await;
     assert_eq!(
         (code, headers["location"].to_str().unwrap()),

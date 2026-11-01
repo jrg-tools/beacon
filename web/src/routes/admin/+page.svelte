@@ -40,7 +40,7 @@
 			const { id } = await api.createProject(input);
 			// The same page with a query string, as the list's Edit links.
 			// eslint-disable-next-line svelte/no-navigation-without-resolve
-			await goto(`${resolve('/')}?project=${id}`);
+			await goto(`${resolve('/admin')}?project=${id}`);
 		}
 		await load();
 	}

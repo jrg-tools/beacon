@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# The admin UI: a static SvelteKit build the Rust server serves under /admin.
+# The admin UI: a static SvelteKit build the Rust server serves (admin pages under /admin, the install page at /firmware).
 FROM node:26-alpine AS web
 WORKDIR /web
 # Node 25+ images no longer ship corepack: install it, then it reads pnpm's version from `packageManager`.

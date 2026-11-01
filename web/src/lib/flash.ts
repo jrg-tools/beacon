@@ -1,5 +1,6 @@
 // Writes a release onto a board over USB with esptool-js, keeping its NVS (WiFi, Beacon key and id).
-// Where each image goes comes from the board's own partition table, so one page fits every project.
+// Where each image goes comes from the board's own partition table, which the running app reports
+// (esptool-js's readFlash stalls on the ESP32-S3's USB port), so one page fits every project.
 
 import { ESPLoader, Transport } from 'esptool-js';
 import type { SerialPort } from './serial.ts';
@@ -12,20 +13,22 @@ export interface Partition {
 	label: string;
 }
 
-/** ESP-IDF's partition table: 32-byte entries that start with 0xAA 0x50, then an MD5 entry. */
-export function partitions(table: Uint8Array): Partition[] {
-	const view = new DataView(table.buffer, table.byteOffset, table.byteLength);
-	const out: Partition[] = [];
-	for (let at = 0; at + 32 <= table.length && view.getUint16(at, true) === 0x50aa; at += 32) {
-		out.push({
-			type: table[at + 2],
-			subtype: table[at + 3],
-			offset: view.getUint32(at + 4, true),
-			size: view.getUint32(at + 8, true),
-			label: new TextDecoder().decode(table.subarray(at + 12, at + 28)).replace(/\0.*$/s, '')
-		});
-	}
-	return out;
+/** The firmware's `beacon partitions` reply: "type,subtype,offset,size,label;…", numbers in hex but the first two. */
+export function partitions(reply: string): Partition[] {
+	return reply
+		.split(';')
+		.filter(Boolean)
+		.map((entry) => {
+			const [type, subtype, offset, size, label = ''] = entry.split(',');
+			return {
+				type: Number(type),
+				subtype: Number(subtype),
+				offset: parseInt(offset, 16),
+				size: parseInt(size, 16),
+				label
+			};
+		})
+		.filter((p) => [p.type, p.subtype, p.offset, p.size].every(Number.isFinite));
 }
 
 /**
@@ -69,10 +72,14 @@ export function place(table: Partition[], assets: { name: string; data: Uint8Arr
 
 export async function flash(
 	port: SerialPort,
+	table: Partition[],
 	assets: { name: string; data: Uint8Array }[],
 	log: (line: string) => void,
 	progress: (fraction: number) => void
 ) {
+	// Placed before the bootloader is entered, so a release that doesn't fit never touches the board.
+	const { files, skipped } = place(table, assets);
+	for (const name of skipped) log(`Skipping ${name}: not an app or filesystem image.`);
 	const transport = new Transport(port as never);
 	const loader = new ESPLoader({
 		transport,
@@ -81,12 +88,6 @@ export async function flash(
 	});
 	try {
 		log(`Chip: ${await loader.main()}`);
-		const table = partitions(await loader.readFlash(0x8000, 0xc00));
-		if (!table.length) throw new Error('No partition table on the board at 0x8000.');
-		for (const p of table)
-			log(`Partition ${p.label} at 0x${p.offset.toString(16)} (${p.size} bytes)`);
-		const { files, skipped } = place(table, assets);
-		for (const name of skipped) log(`Skipping ${name}: not an app or filesystem image.`);
 		const total = files.reduce((sum, f) => sum + f.data.length, 0);
 		const before = files.map((_, i) =>
 			files.slice(0, i).reduce((sum, f) => sum + f.data.length, 0)
@@ -102,9 +103,10 @@ export async function flash(
 			reportProgress: (i, written, size) =>
 				progress((before[i] + (written / size) * files[i].data.length) / total)
 		});
-		log('Restarting the board…');
-		await loader.after('hard_reset');
 	} finally {
+		// Even after a failure: left in the bootloader, the board looks dead until it is replugged.
+		log('Restarting the board…');
+		await loader.after('hard_reset').catch(() => {});
 		await transport.disconnect().catch(() => {});
 	}
 }

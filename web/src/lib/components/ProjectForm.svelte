@@ -113,7 +113,7 @@
 		>
 		{#if project}
 			<a
-				href={resolve('/')}
+				href={resolve('/admin')}
 				class="rounded-lg px-5 py-2.5 font-semibold text-zinc-500 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
 				>Cancel</a
 			>

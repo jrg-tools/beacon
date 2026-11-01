@@ -5,7 +5,7 @@ repos included) into SQLite, caches their assets on disk, and serves them to dev
 request. An admin UI behind Clerk manages projects and devices.
 
 - `src/` — the Rust server (axum + sqlx/SQLite). It owns every API and serves the admin UI.
-- `web/` — the admin UI (SvelteKit 3, static build, served by Rust under `/admin`).
+- `web/` — the admin UI (SvelteKit 3, static build, served by Rust: admin pages under `/admin`, the install page at `/firmware/<slug>`).
 
 ## Layout
 
@@ -42,20 +42,22 @@ mayanhcu.
 
 ## Installing over USB
 
-**Install** on the project page opens `/admin/firmware?id=<project>`: pick a version, plug the board in
+**Install** on the project page opens `/firmware/<slug>` (the project page is `/admin/project/<slug>`): pick a version, plug the board in
 and click **Connect and install**. Before writing anything the page sends
 
 ```
 > beacon whoami <nonce>     < beacon:whoami <nonce> <dev_...> <signature hex>   (or "none")
+> beacon partitions         < beacon:partitions <type,subtype,offset hex,size hex,label;...>
 ```
 
 and the server checks the signature over `beacon whoami\n<nonce>` against that device's public key
 (`POST /admin/api/projects/{id}/devices/verify`); a board that is not a registered device of this
 project is refused. The page then downloads the release's assets
 (`GET /admin/api/projects/{id}/releases/{tag}/{asset}`) and flashes them with esptool-js, using the
-board's own partition table: the app to factory/ota_0, the filesystem image to the SPIFFS/LittleFS
+partition table the app reported (esptool-js's `readFlash` stalls on the ESP32-S3's USB port): the app to factory/ota_0, the filesystem image to the SPIFFS/LittleFS
 partition, and otadata is blanked so the new app boots. NVS (WiFi, the Beacon key and id) is kept.
-Boards on firmware older than `beacon whoami` need one over-the-air update first.
+Boards on firmware older than `beacon partitions` need one update over the air or with PlatformIO first.
+The board is reset out of the bootloader even when an install fails.
 
 ## Device API
 

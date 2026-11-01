@@ -12,9 +12,9 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
-			// Static files served by the Rust server under /admin; it owns every API and the config.
-			adapter: adapter({ fallback: 'index.html' }),
-			paths: { base: '/admin' }
+			// Static files the Rust server serves; it owns every API and the config. The admin pages
+			// live under routes/admin and the install page at /firmware/<slug>.
+			adapter: adapter({ fallback: 'index.html' })
 		})
 	],
 	// `pnpm dev` talks to a local `cargo run`.

@@ -16,7 +16,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde_json::{Value, json};
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::services::ServeFile;
 
 pub use clerk::Clerk;
 
@@ -46,9 +46,11 @@ pub fn router(state: AppState, ui_dir: &Path) -> Router<AppState> {
         // Public: the page needs the key before anyone can sign in.
         .route("/config", get(config))
         .fallback(|| async { status(StatusCode::NOT_FOUND, "not found") });
-    // A single-page app: unknown paths get index.html and the client router takes over.
-    let ui = ServeDir::new(ui_dir).fallback(ServeFile::new(ui_dir.join("index.html")));
-    Router::new().nest("/api", api).fallback_service(ui)
+    // A single-page app: its pages get index.html and the client router takes over. Its files are
+    // served from the root (`app::router`).
+    Router::new()
+        .nest("/api", api)
+        .fallback_service(ServeFile::new(ui_dir.join("index.html")))
 }
 
 async fn config(State(state): State<AppState>) -> Json<Value> {

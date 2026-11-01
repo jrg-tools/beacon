@@ -9,18 +9,19 @@
 	import { ago } from '#lib/format.ts';
 	import type { Project, ProjectStats as Stats } from '#lib/types.ts';
 
-	// A number, so the lists below only reload when another project is opened.
-	const id = $derived(Number(page.url.searchParams.get('id')) || 0);
+	const slug = $derived(page.params.slug ?? '');
 
 	let project = $state<Project | null>(null);
+	// A number, so the lists below only reload when another project is opened.
+	const id = $derived(project?.id ?? 0);
 	let stats = $state<Stats | null>(null);
 	let error = $state('');
 
 	async function load() {
 		try {
-			const [projects, s] = await Promise.all([api.projects(), api.stats(id)]);
-			project = projects.find((p) => p.id === id) ?? null;
-			stats = s;
+			const found = (await api.projects()).find((p) => p.slug === slug) ?? null;
+			stats = found ? await api.stats(found.id) : null;
+			project = found;
 			error = project ? '' : 'No such project.';
 		} catch (err) {
 			error = (err as Error).message;
@@ -41,7 +42,7 @@
 	<!-- The back link sits right above the name, not a whole section gap away. -->
 	<div class="space-y-3">
 		<a
-			href={resolve('/')}
+			href={resolve('/admin')}
 			class="-ml-3 inline-block rounded-lg px-3 py-1.5 text-sm font-semibold text-zinc-500 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
 			>← Projects</a
 		>
@@ -74,8 +75,8 @@
 						· {project.latest ?? 'no release'} · synced {ago(project.synced_at)}
 					</p>
 				</div>
-				<a href="{resolve('/')}?project={project.id}" class="action">Edit</a>
-				<a href="{resolve('/firmware')}?id={project.id}" class="action">Install</a>
+				<a href="{resolve('/admin')}?project={project.id}" class="action">Edit</a>
+				<a href={resolve('/firmware/[slug]', { slug: project.slug })} class="action">Install</a>
 			</header>
 		{/if}
 	</div>

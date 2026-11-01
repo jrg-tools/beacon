@@ -54,8 +54,8 @@
 					{/if}
 				</div>
 				<div class="-mx-3 flex w-full justify-end sm:mx-0 sm:w-auto">
-					<a href="{resolve('/project')}?id={project.id}" class="action">Open</a>
-					<a href="{resolve('/')}?project={project.id}" class="action">Edit</a>
+					<a href={resolve('/admin/project/[slug]', { slug: project.slug })} class="action">Open</a>
+					<a href="{resolve('/admin')}?project={project.id}" class="action">Edit</a>
 					<button class="action" onclick={() => run(() => api.syncProject(project.id))}>
 						Sync
 					</button>

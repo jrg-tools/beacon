@@ -4,14 +4,15 @@
 	import { page } from '$app/state';
 	import { onMount, tick } from 'svelte';
 	import { api } from '#lib/api.ts';
-	import { flash } from '#lib/flash.ts';
+	import { flash, partitions } from '#lib/flash.ts';
 	import { date, size } from '#lib/format.ts';
 	import { connect, hasSerial } from '#lib/serial.ts';
 	import type { Project, Release } from '#lib/types.ts';
 
-	const id = $derived(Number(page.url.searchParams.get('id')) || 0);
+	const slug = $derived(page.params.slug ?? '');
 
 	let project = $state<Project | null>(null);
+	const id = $derived(project?.id ?? 0);
 	let releases = $state<Release[]>([]);
 	let tag = $state('');
 	let error = $state('');
@@ -29,10 +30,9 @@
 
 	onMount(async () => {
 		try {
-			const [projects, list] = await Promise.all([api.projects(), api.releases(id)]);
-			project = projects.find((p) => p.id === id) ?? null;
-			releases = list;
-			tag = project?.latest ?? list[0]?.tag ?? '';
+			project = (await api.projects()).find((p) => p.slug === slug) ?? null;
+			releases = project ? await api.releases(project.id) : [];
+			tag = project?.latest ?? releases[0]?.tag ?? '';
 			if (!project) error = 'No such project.';
 		} catch (err) {
 			error = (err as Error).message;
@@ -75,6 +75,16 @@
 				throw new Error('This device is not registered: sync it on the project page first.');
 			device = await api.verifyDevice(id, { device: claimed, nonce, signature });
 			log(`Verified ${device.name} (${device.id}).`, 'ok');
+			const table = partitions(
+				await board.ask('beacon partitions', 'beacon:partitions ', 5000).catch(() => {
+					throw new Error(
+						'The device did not report its partitions: its firmware predates installs from here, so update it over the air or with PlatformIO once.'
+					);
+				})
+			);
+			if (!table.length) throw new Error('The device reported no partitions.');
+			for (const p of table)
+				log(`Partition ${p.label} at 0x${p.offset.toString(16)} (${size(p.size)})`);
 			const port = board.port;
 			await board.close();
 			board = undefined;
@@ -90,6 +100,7 @@
 			log(`Entering the bootloader to install ${release.tag}…`);
 			await flash(
 				port,
+				table,
 				assets,
 				(line) => log(line),
 				(fraction) => {
@@ -124,7 +135,7 @@
 <div class="mx-auto max-w-3xl space-y-8 px-4 pb-20 sm:px-6">
 	<div class="space-y-3">
 		<a
-			href="{resolve('/project')}?id={id}"
+			href={resolve('/admin/project/[slug]', { slug })}
 			class="-ml-3 inline-block rounded-lg px-3 py-1.5 text-sm font-semibold text-zinc-500 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
 			>← {project?.name ?? 'Project'}</a
 		>

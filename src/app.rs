@@ -1,4 +1,5 @@
-//! The HTTP surface: devices under `/api/v1/firmware`, the admin page under `/admin`.
+//! The HTTP surface: devices under `/api/v1/firmware`, the admin page under `/admin`, the install
+//! page at `/firmware/{slug}`, and the UI's files at the root.
 
 use axum::{
     Router,
@@ -7,7 +8,11 @@ use axum::{
     response::Redirect,
     routing::get,
 };
-use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
+use tower_http::{
+    services::{ServeDir, ServeFile},
+    set_header::SetResponseHeaderLayer,
+    trace::TraceLayer,
+};
 
 use crate::{admin, device, state::AppState};
 
@@ -19,6 +24,12 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/", get(|| async { Redirect::permanent("/admin") }))
         .nest("/api/v1/firmware", device::router(state.clone()))
         .nest("/admin", admin::router(state.clone(), &state.ui_dir))
+        .route_service(
+            "/firmware/{slug}",
+            ServeFile::new(state.ui_dir.join("index.html")),
+        )
+        // The UI's scripts, styles and images; anything else is a 404.
+        .fallback_service(ServeDir::new(&state.ui_dir))
         .layer(SetResponseHeaderLayer::overriding(
             header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),

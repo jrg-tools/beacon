@@ -23,8 +23,8 @@
 			: ''}"
 	>
 		<div class="mx-auto flex max-w-7xl items-center gap-2 sm:gap-3">
-			<a href={resolve('/')} class="mr-auto flex min-w-0 flex-row items-center gap-2">
-				<img src="{resolve('/')}/logo.webp" class="w-8 shrink-0 sm:w-9" alt="" />
+			<a href={resolve('/admin')} class="mr-auto flex min-w-0 flex-row items-center gap-2">
+				<img src="/logo.webp" class="w-8 shrink-0 sm:w-9" alt="" />
 				<span class="truncate text-lg font-bold sm:text-xl">Beacon</span>
 			</a>
 			{#if signedIn}<UserButton />{/if}
