@@ -6,6 +6,7 @@ mod device;
 mod error;
 mod firmware;
 mod github;
+mod install;
 mod state;
 
 use std::time::Duration;

@@ -8,21 +8,53 @@ export interface SerialPort {
 	open(options: { baudRate: number }): Promise<void>;
 	setSignals(signals: { dataTerminalReady?: boolean; requestToSend?: boolean }): Promise<void>;
 	close(): Promise<void>;
+	getInfo(): { usbVendorId?: number; usbProductId?: number };
 }
+
+const serial = () =>
+	(
+		navigator as Navigator & {
+			serial: {
+				requestPort(options: { filters: { usbVendorId: number }[] }): Promise<SerialPort>;
+				getPorts(): Promise<SerialPort[]>;
+			};
+		}
+	).serial;
 
 export const hasSerial = () => typeof navigator !== 'undefined' && 'serial' in navigator;
 
 /** Asks the browser for a port; rejects with a `NotFoundError` DOMException if none is picked. */
 export async function connect() {
-	const serial = (
-		navigator as Navigator & {
-			serial: { requestPort(options: { filters: { usbVendorId: number }[] }): Promise<SerialPort> };
-		}
-	).serial;
 	// Only ESP32 boards: Espressif's native USB, plus the USB-UART chips dev boards use (CP210x, CH34x, FTDI).
-	const port = await serial.requestPort({
+	const port = await serial().requestPort({
 		filters: [0x303a, 0x10c4, 0x1a86, 0x0403].map((usbVendorId) => ({ usbVendorId }))
 	});
+	return open(port);
+}
+
+/**
+ * Opens the board again after a reset, which drops it off USB (it may come back as another port
+ * object). No port picker: that needs a click, and the page already has permission for it.
+ */
+export async function reconnect(port: SerialPort, timeoutMs = 30000) {
+	const { usbVendorId, usbProductId } = port.getInfo();
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		for (const p of await serial().getPorts()) {
+			const info = p.getInfo();
+			if (info.usbVendorId !== usbVendorId || info.usbProductId !== usbProductId) continue;
+			try {
+				return await open(p);
+			} catch {
+				await p.close().catch(() => {}); // not back yet; try again
+			}
+		}
+		await new Promise((resolve) => setTimeout(resolve, 500));
+	}
+	throw new Error('The device did not come back on USB after the restart.');
+}
+
+async function open(port: SerialPort) {
 	await port.open({ baudRate: 115200 });
 	// The ESP32-S3's USB port resets the chip when RTS is on and DTR off, so RTS goes first.
 	await port.setSignals({ requestToSend: false });

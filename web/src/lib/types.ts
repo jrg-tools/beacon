@@ -81,3 +81,14 @@ export interface ProjectStats {
 	/** The last 30 days, oldest first. */
 	days: StatsDay[];
 }
+
+/** The public install page's view of a project (src/install.rs): no devices, no hashes. */
+export interface InstallProject {
+	slug: string;
+	name: string;
+	emoji: string;
+	latest: string | null;
+	releases: (Pick<Release, 'tag' | 'prerelease' | 'published_at'> & {
+		assets: Pick<Asset, 'name' | 'size'>[];
+	})[];
+}

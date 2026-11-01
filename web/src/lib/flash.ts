@@ -106,7 +106,10 @@ export async function flash(
 	} finally {
 		// Even after a failure: left in the bootloader, the board looks dead until it is replugged.
 		log('Restarting the board…');
-		await loader.after('hard_reset').catch(() => {});
+		// esptool-js's 'hard_reset' only releases RTS without pulling it first, so the chip never
+		// resets and stays in the flasher (a board with a battery then looks dead). So: IO0 high
+		// (DTR off) for a normal boot, then pulse EN low (RTS on) and release it.
+		await loader.after('custom_reset', undefined, 'D0|R1|W100|R0').catch(() => {});
 		await transport.disconnect().catch(() => {});
 	}
 }

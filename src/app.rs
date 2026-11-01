@@ -1,4 +1,4 @@
-//! The HTTP surface: devices under `/api/v1/firmware`, the admin page under `/admin`, the install
+//! The HTTP surface: devices under `/api/v1/firmware`, the install page's version picker under `/api/v1/install`, the admin page under `/admin`, the install
 //! page at `/firmware/{slug}`, and the UI's files at the root.
 
 use axum::{
@@ -14,7 +14,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{admin, device, state::AppState};
+use crate::{admin, device, install, state::AppState};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -23,6 +23,7 @@ pub fn router(state: AppState) -> Router {
         // `nest` does not match the trailing slash.
         .route("/admin/", get(|| async { Redirect::permanent("/admin") }))
         .nest("/api/v1/firmware", device::router(state.clone()))
+        .nest("/api/v1/install", install::router())
         .nest("/admin", admin::router(state.clone(), &state.ui_dir))
         .route_service(
             "/firmware/{slug}",

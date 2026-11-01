@@ -1,28 +1,26 @@
 <script lang="ts">
 	import { beforeNavigate } from '$app/navigation';
-	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { onMount, tick } from 'svelte';
-	import { api } from '#lib/api.ts';
+	import { deviceGet as deviceRequest, projectReleases } from '#lib/api.ts';
 	import { flash, partitions } from '#lib/flash.ts';
 	import { date, size } from '#lib/format.ts';
-	import { connect, hasSerial } from '#lib/serial.ts';
-	import type { Project, Release } from '#lib/types.ts';
+	import { connect, hasSerial, reconnect } from '#lib/serial.ts';
+	import type { InstallProject } from '#lib/types.ts';
 
 	const slug = $derived(page.params.slug ?? '');
 
-	let project = $state<Project | null>(null);
-	const id = $derived(project?.id ?? 0);
-	let releases = $state<Release[]>([]);
+	let project = $state<InstallProject | null>(null);
+	const releases = $derived(project?.releases ?? []);
 	let tag = $state('');
 	let error = $state('');
 
-	const STEPS = ['Verify device', 'Download', 'Flash', 'Restart'];
+	const STEPS = ['Verify device', 'Download', 'Flash', 'Restart', 'Check boot'];
 	// -1 before a run; STEPS.length once it is done.
 	let step = $state(-1);
 	let progress = $state(0);
 	let running = $state(false);
-	let device = $state<{ id: string; name: string } | null>(null);
+	let device = $state<{ id: string } | null>(null);
 	let logs = $state<{ at: string; text: string; kind?: 'error' | 'ok' }[]>([]);
 	let terminal = $state<HTMLElement>();
 
@@ -30,10 +28,8 @@
 
 	onMount(async () => {
 		try {
-			project = (await api.projects()).find((p) => p.slug === slug) ?? null;
-			releases = project ? await api.releases(project.id) : [];
-			tag = project?.latest ?? releases[0]?.tag ?? '';
-			if (!project) error = 'No such project.';
+			project = await projectReleases(slug);
+			tag = project.latest ?? project.releases[0]?.tag ?? '';
 		} catch (err) {
 			error = (err as Error).message;
 		}
@@ -46,8 +42,41 @@
 		terminal?.scrollTo({ top: terminal.scrollHeight });
 	}
 
-	// The board must prove, with the key it made when it was synced, that it is a device of this
-	// project before anything is written to it.
+	type Board = Awaited<ReturnType<typeof connect>>;
+
+	// Who the board is and what it runs; "none" before it is synced.
+	async function info(board: Board, timeoutMs: number, silent: string) {
+		const reply = await board.ask('beacon info', 'beacon:info ', timeoutMs).catch(() => {
+			throw new Error(silent);
+		});
+		const [id, version] = reply.split(' ');
+		if (id === 'none')
+			throw new Error('This device is not registered: sync it on the project page first.');
+		return { id, version };
+	}
+
+	// The device API, as if the board called it: it signs the request over USB with its key, and the
+	// server refuses a board that is not a registered device of this project.
+	async function deviceGet(board: Board, id: string, path: string) {
+		const timestamp = Math.floor(Date.now() / 1000);
+		const request = `${timestamp} GET ${path}`;
+		const signature = await board.ask(`beacon sign ${request}`, `beacon:sig ${request} `, 5000);
+		if (signature === 'none')
+			throw new Error('This device is not registered: sync it on the project page first.');
+		return deviceRequest(path, { device: id, timestamp, signature }).catch((err) => {
+			if (err.status === 401)
+				throw new Error('This device is not registered: sync it on the project page first.');
+			throw err;
+		});
+	}
+
+	// Also how Beacon learns the version: the same check the board makes over WiFi.
+	const check = (board: Board, id: string, version: string) =>
+		deviceGet(board, id, `/api/v1/firmware/${slug}/latest?current=${encodeURIComponent(version)}`);
+
+	const sameVersion = (a: string, b: string) => a.replace(/^v/, '') === b.replace(/^v/, '');
+
+	// Verified before anything is written, and again once the new firmware has booted.
 	async function install() {
 		if (!release) return;
 		error = '';
@@ -56,45 +85,35 @@
 		progress = 0;
 		running = true;
 		step = 0;
-		let board: Awaited<ReturnType<typeof connect>> | undefined;
+		let board: Board | undefined;
 		try {
 			board = await connect();
 			log('Port open, asking the device who it is…');
-			const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
-				b.toString(16).padStart(2, '0')
-			).join('');
-			const reply = await board
-				.ask(`beacon whoami ${nonce}`, `beacon:whoami ${nonce} `)
-				.catch(() => {
-					throw new Error(
-						'The device did not answer "beacon whoami": its firmware predates installs from here, so update it over the air once.'
-					);
-				});
-			const [claimed, signature] = reply.split(' ');
-			if (!signature)
-				throw new Error('This device is not registered: sync it on the project page first.');
-			device = await api.verifyDevice(id, { device: claimed, nonce, signature });
-			log(`Verified ${device.name} (${device.id}).`, 'ok');
-			const table = partitions(
-				await board.ask('beacon partitions', 'beacon:partitions ', 5000).catch(() => {
-					throw new Error(
-						'The device did not report its partitions: its firmware predates installs from here, so update it over the air or with PlatformIO once.'
-					);
-				})
+			const before = await info(
+				board,
+				15000,
+				'The device did not answer "beacon info": its firmware predates installs from here, so update it over the air or with PlatformIO once.'
 			);
+			await check(board, before.id, before.version);
+			device = before;
+			log(`Your device is verified (${device.id}), on ${before.version}.`, 'ok');
+			const table = partitions(await board.ask('beacon partitions', 'beacon:partitions ', 5000));
 			if (!table.length) throw new Error('The device reported no partitions.');
 			for (const p of table)
 				log(`Partition ${p.label} at 0x${p.offset.toString(16)} (${size(p.size)})`);
-			const port = board.port;
-			await board.close();
-			board = undefined;
 
+			// While the board is still connected: it signs each download.
 			step = 1;
 			const assets = [];
 			for (const asset of release.assets) {
 				log(`Downloading ${asset.name} (${size(asset.size)})…`);
-				assets.push({ name: asset.name, data: await api.asset(id, release.tag, asset.name) });
+				const path = `/api/v1/firmware/${slug}/releases/${encodeURIComponent(release.tag)}/${encodeURIComponent(asset.name)}`;
+				const res = await deviceGet(board, before.id, path);
+				assets.push({ name: asset.name, data: new Uint8Array(await res.arrayBuffer()) });
 			}
+			const port = board.port;
+			await board.close();
+			board = undefined;
 
 			step = 2;
 			log(`Entering the bootloader to install ${release.tag}…`);
@@ -108,8 +127,21 @@
 					if (fraction >= 1) step = 3;
 				}
 			);
+			step = 4;
+			log('Waiting for the device to boot…');
+			board = await reconnect(port);
+			const after = await info(
+				board,
+				30000,
+				'The device came back on USB but did not answer: the new firmware may not boot. Install it again or check its serial log.'
+			);
+			if (after.id !== device.id)
+				throw new Error(`A different device answered after the restart (${after.id}).`);
+			if (!sameVersion(after.version, release.tag))
+				throw new Error(`It booted ${after.version}, not ${release.tag}.`);
+			await check(board, after.id, after.version);
+			log(`Your device booted ${after.version}, key intact.`, 'ok');
 			step = STEPS.length;
-			log(`${device.name} now runs ${release.tag}.`, 'ok');
 		} catch (err) {
 			// Closing the port picker is not an error.
 			if ((err as Error).name === 'NotFoundError') step = -1;
@@ -134,11 +166,6 @@
 
 <div class="mx-auto max-w-3xl space-y-8 px-4 pb-20 sm:px-6">
 	<div class="space-y-3">
-		<a
-			href={resolve('/admin/project/[slug]', { slug })}
-			class="-ml-3 inline-block rounded-lg px-3 py-1.5 text-sm font-semibold text-zinc-500 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
-			>← {project?.name ?? 'Project'}</a
-		>
 		<header class="flex items-center gap-4">
 			<span
 				class="grid size-14 shrink-0 place-items-center rounded-lg bg-amber-100 text-3xl dark:bg-amber-500/15"
@@ -195,7 +222,7 @@
 
 	{#if step >= 0}
 		<section class="space-y-5" aria-live="polite">
-			<ol class="grid grid-cols-4 gap-2">
+			<ol class="grid grid-cols-5 gap-2">
 				{#each STEPS as label, i (label)}
 					{@const state =
 						i < step ? 'done' : i === step ? (error ? 'failed' : 'active') : 'waiting'}
@@ -231,10 +258,11 @@
 				{/each}
 			</ol>
 
-			{#if step >= 2}
+			<!-- Only while writing: once the board restarts it is off USB and the bar has nothing to show. -->
+			{#if step === 2}
 				<div class="space-y-1.5">
 					<div class="flex justify-between text-xs font-semibold text-zinc-500">
-						<span>{step >= STEPS.length ? 'Installed' : 'Writing flash'}</span>
+						<span>Writing flash</span>
 						<span class="tabular-nums">{Math.round(progress * 100)}%</span>
 					</div>
 					<div
@@ -261,7 +289,7 @@
 					class="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm"
 					role="status"
 				>
-					{device.name} is on {release.tag}. It reports the new version on its next update check.
+					Your device is on {release.tag}.
 				</p>
 			{/if}
 			{#if error}

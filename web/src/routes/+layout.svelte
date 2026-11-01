@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { ClerkProvider, Show, SignIn, UserButton } from 'svelte-clerk/client';
 	import { fetchConfig } from '#lib/api.ts';
 	import './layout.css';
@@ -7,6 +8,8 @@
 	let { children } = $props();
 	// The key comes from the server at runtime, so one build works for every Clerk instance.
 	const config = fetchConfig();
+	// The install page needs no sign-in: the board's signature is its credential (src/install.rs).
+	const signInFree = $derived(page.route.id?.startsWith('/firmware/') ?? false);
 	const year = new Date().getFullYear();
 	// As in jrg-life: the header follows scrollY (scroll-driven CSS doesn't run in Safari or Firefox).
 	let scrollY = $state(0);
@@ -33,25 +36,30 @@
 {/snippet}
 
 <div class="flex min-h-screen flex-col">
-	{#await config then { clerk_publishable_key }}
-		<ClerkProvider publishableKey={clerk_publishable_key}>
-			<Show when="signed-in">
-				{@render shell(true)}
-				<main class="mt-20 flex-grow sm:mt-24">{@render children()}</main>
-				{#snippet fallback()}
-					{@render shell(false)}
-					<main class="mt-20 flex flex-grow flex-col items-center gap-4 px-6 py-8 sm:mt-24">
-						<SignIn routing="hash" />
-					</main>
-				{/snippet}
-			</Show>
-		</ClerkProvider>
-	{:catch error}
+	{#if signInFree}
 		{@render shell(false)}
-		<main class="mt-20 flex-grow px-6 py-8 sm:mt-24">
-			<p class="text-sm font-semibold text-red-600" role="alert">{error.message}</p>
-		</main>
-	{/await}
+		<main class="mt-20 flex-grow sm:mt-24">{@render children()}</main>
+	{:else}
+		{#await config then { clerk_publishable_key }}
+			<ClerkProvider publishableKey={clerk_publishable_key}>
+				<Show when="signed-in">
+					{@render shell(true)}
+					<main class="mt-20 flex-grow sm:mt-24">{@render children()}</main>
+					{#snippet fallback()}
+						{@render shell(false)}
+						<main class="mt-20 flex flex-grow flex-col items-center gap-4 px-6 py-8 sm:mt-24">
+							<SignIn routing="hash" />
+						</main>
+					{/snippet}
+				</Show>
+			</ClerkProvider>
+		{:catch error}
+			{@render shell(false)}
+			<main class="mt-20 flex-grow px-6 py-8 sm:mt-24">
+				<p class="text-sm font-semibold text-red-600" role="alert">{error.message}</p>
+			</main>
+		{/await}
+	{/if}
 
 	<footer class="bg-zinc-100/20 select-none dark:bg-zinc-900/30">
 		<div class="mx-auto w-full max-w-screen-xl px-4 py-6 sm:px-6 lg:py-8">

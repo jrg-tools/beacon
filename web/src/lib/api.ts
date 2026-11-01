@@ -1,4 +1,11 @@
-import type { Device, Project, ProjectInput, ProjectStats, Release } from './types.ts';
+import type {
+	Device,
+	InstallProject,
+	Project,
+	ProjectInput,
+	ProjectStats,
+	Release
+} from './types.ts';
 
 /** Where the Rust server mounts the admin API (next to this app's `paths.base`). */
 const API = '/admin/api';
@@ -12,24 +19,24 @@ export class ApiError extends Error {
 	}
 }
 
-/** Calls the Rust admin API with the Clerk session token; errors carry the server's message. */
-async function call(path: string, init: RequestInit = {}): Promise<Response> {
+/** Calls the Rust API, with the Clerk session token when signed in; errors carry the server's message. */
+async function json<T>(url: string, init: RequestInit = {}): Promise<T> {
 	const token = await window.Clerk?.session?.getToken();
-	const res = await fetch(`${API}${path}`, {
+	const res = await fetch(url, {
 		...init,
-		headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+		headers: {
+			'Content-Type': 'application/json',
+			...(token ? { Authorization: `Bearer ${token}` } : {})
+		}
 	});
 	if (!res.ok) {
 		const body = await res.json().catch(() => ({}));
 		throw new ApiError(body.error ?? res.statusText, res.status);
 	}
-	return res;
-}
-
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-	const res = await call(path, init);
 	return (res.status === 202 || res.status === 204 ? null : await res.json()) as T;
 }
+
+const request = <T>(path: string, init?: RequestInit) => json<T>(`${API}${path}`, init);
 
 const send = (method: string, body?: unknown): RequestInit => ({
 	method,
@@ -57,16 +64,30 @@ export const api = {
 			`/projects/${id}/devices`,
 			send('POST', { name, public_key: publicKey })
 		),
-	/** Checks a board's `beacon whoami` signature; rejects with 403 if it is not this project's. */
-	verifyDevice: (id: number, proof: { device: string; nonce: string; signature: string }) =>
-		request<{ id: string; name: string }>(`/projects/${id}/devices/verify`, send('POST', proof)),
-	asset: async (id: number, tag: string, name: string) =>
-		new Uint8Array(
-			await (
-				await call(
-					`/projects/${id}/releases/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`
-				)
-			).arrayBuffer()
-		),
 	deleteDevice: (id: string) => request<null>(`/devices/${id}`, send('DELETE'))
 };
+
+/** The install page's version picker: public, no files (src/install.rs). */
+export const projectReleases = (slug: string) => json<InstallProject>(`/api/v1/install/${slug}`);
+
+/**
+ * A device API request (`/api/v1/firmware/…`) made for the board, with the headers it signed over
+ * USB; the server checks them as it checks the board's own requests.
+ */
+export async function deviceGet(
+	path: string,
+	headers: { device: string; timestamp: number; signature: string }
+): Promise<Response> {
+	const res = await fetch(path, {
+		headers: {
+			'X-Beacon-Device': headers.device,
+			'X-Beacon-Timestamp': String(headers.timestamp),
+			'X-Beacon-Signature': headers.signature
+		}
+	});
+	if (!res.ok) {
+		const body = await res.json().catch(() => ({}));
+		throw new ApiError(body.error ?? res.statusText, res.status);
+	}
+	return res;
+}

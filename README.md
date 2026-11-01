@@ -15,6 +15,7 @@ request. An admin UI behind Clerk manages projects and devices.
 | `config.rs`, `state.rs`  | Environment settings; shared state                                  |
 | `device/auth.rs`         | Ed25519 signature check on every device request                     |
 | `device/handlers.rs`     | `latest` and `download`                                             |
+| `install.rs`             | The public install page's version picker                            |
 | `firmware/version.rs`    | Semver: which release is newest, whether an update is available     |
 | `firmware/store.rs`      | Release and asset queries                                           |
 | `firmware/cache.rs`      | Assets on disk, fetched from GitHub on first use                    |
@@ -42,22 +43,28 @@ mayanhcu.
 
 ## Installing over USB
 
-**Install** on the project page opens `/firmware/<slug>` (the project page is `/admin/project/<slug>`): pick a version, plug the board in
-and click **Connect and install**. Before writing anything the page sends
+**Install** on the project page opens `/firmware/<slug>` (the project page is `/admin/project/<slug>`).
+It needs no sign-in: pick a version (`GET /api/v1/install/{slug}`, tags and asset sizes only), plug
+the board in and click **Connect and install**. Everything else goes through the device API below,
+signed by the board over USB, so only a registered device of the project gets its firmware:
 
 ```
-> beacon whoami <nonce>     < beacon:whoami <nonce> <dev_...> <signature hex>   (or "none")
-> beacon partitions         < beacon:partitions <type,subtype,offset hex,size hex,label;...>
+> beacon info                          < beacon:info <dev_...|none> <version>
+> beacon sign <ts> GET <path?query>    < beacon:sig <ts> GET <path?query> <signature hex|none>
+> beacon partitions                    < beacon:partitions <type,subtype,offset hex,size hex,label;...>
 ```
 
-and the server checks the signature over `beacon whoami\n<nonce>` against that device's public key
-(`POST /admin/api/projects/{id}/devices/verify`); a board that is not a registered device of this
-project is refused. The page then downloads the release's assets
-(`GET /admin/api/projects/{id}/releases/{tag}/{asset}`) and flashes them with esptool-js, using the
-partition table the app reported (esptool-js's `readFlash` stalls on the ESP32-S3's USB port): the app to factory/ota_0, the filesystem image to the SPIFFS/LittleFS
-partition, and otadata is blanked so the new app boots. NVS (WiFi, the Beacon key and id) is kept.
-Boards on firmware older than `beacon partitions` need one update over the air or with PlatformIO first.
-The board is reset out of the bootloader even when an install fails.
+`beacon sign` signs the same message the board signs for its own requests (only `GET`s of
+`/api/v1/firmware/`), and the page sends it with the usual headers: `latest?current=<version>` checks
+the board is registered here (and records its version), then each asset is downloaded as a device
+download. The page flashes them with esptool-js, using the partition table the app reported
+(esptool-js's `readFlash` stalls on the ESP32-S3's USB port): the app to factory/ota_0, the filesystem
+image to the SPIFFS/LittleFS partition, and otadata is blanked so the new app boots. NVS (WiFi, the
+Beacon key and id) is kept. The board is reset out of the bootloader even when an install fails.
+Afterwards the page reopens the port, checks the same device answers on the new version and makes a
+signed `latest` check, so the update shows as succeeded. The computer's clock must be within 5 minutes
+of the server's, like the board's. Boards on firmware older than `beacon sign` need one update over
+the air or with PlatformIO first.
 
 ## Device API
 

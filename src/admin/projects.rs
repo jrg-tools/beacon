@@ -2,14 +2,11 @@ use std::collections::BTreeMap;
 
 use axum::{
     Json,
-    body::Body,
     extract::{Path, State},
-    http::{StatusCode, header},
-    response::{IntoResponse, Response},
+    http::StatusCode,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio_util::io::ReaderStream;
 
 use super::project_input::ProjectInput;
 use crate::{
@@ -249,31 +246,4 @@ pub async fn stats(State(state): State<AppState>, Path(id): Path<i64>) -> Result
         "versions": versions,
         "days": days,
     })))
-}
-
-/// A release asset for the firmware page to flash over USB; not counted as a device download.
-pub async fn asset(
-    State(state): State<AppState>,
-    Path((id, tag, name)): Path<(i64, String, String)>,
-) -> Result<Response> {
-    let asset = store::find_asset(&state.db, id, &tag, &name)
-        .await?
-        .ok_or(status(StatusCode::NOT_FOUND, "no such asset"))?;
-    let (repo,): (String,) = sqlx::query_as("SELECT repo FROM projects WHERE id = ?")
-        .bind(id)
-        .fetch_one(&state.db)
-        .await?;
-    let asset = cache::ensure(&state, &repo, asset).await.map_err(|e| {
-        tracing::error!("{e:#}");
-        status(
-            StatusCode::BAD_GATEWAY,
-            "firmware not cached and GitHub unavailable",
-        )
-    })?;
-    let file = tokio::fs::File::open(cache::path(&state, asset.github_id)).await?;
-    let headers = [
-        (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-        (header::CONTENT_LENGTH, asset.size.to_string()),
-    ];
-    Ok((headers, Body::from_stream(ReaderStream::new(file))).into_response())
 }
