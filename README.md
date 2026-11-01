@@ -85,6 +85,38 @@ void addBeaconHeaders(HTTPClient* http, const String& pathQuery) {
 }
 ```
 
+### Provisioning over USB
+
+Instead of building the id and secret into the firmware, a device can take them from the admin page:
+after **Register**, plug it in and click **Send to device over USB** (Chrome or Edge, Web Serial).
+Opening the port resets most ESP32 boards; the page then waits up to 15 s for `BEACON READY`, sends
+`BEACON <id> <secret>` and waits for `BEACON OK`, all at 115200 baud. Call this first in `setup()`
+and read the id and secret from `Preferences` (namespace `beacon`) instead of the defines above:
+
+```cpp
+#include <Preferences.h>
+
+// Listens for 5 s after boot; keeps what it already has if nothing arrives.
+void beaconProvision() {
+  Serial.begin(115200);
+  Serial.setTimeout(500);
+  for (unsigned long start = millis(); millis() - start < 5000;) {
+    Serial.println("BEACON READY");
+    String line = Serial.readStringUntil('\n');
+    line.trim();
+    const int space = line.indexOf(' ', 7);
+    if (!line.startsWith("BEACON dev_") || space < 0) continue;
+    Preferences prefs;
+    prefs.begin("beacon");
+    prefs.putString("id", line.substring(7, space));
+    prefs.putString("secret", line.substring(space + 1));
+    prefs.end();
+    Serial.println("BEACON OK");
+    return;
+  }
+}
+```
+
 ## Admin
 
 `/admin` is protected by Clerk. Use the same instance as jrg-life, and give admins `privateMetadata`
