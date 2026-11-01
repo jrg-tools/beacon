@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { api } from '#lib/api.ts';
 	import { ago } from '#lib/format.ts';
-	import { provision, serialSupported } from '#lib/serial.ts';
 	import type { Device, DeviceCredentials, ProjectStats } from '#lib/types.ts';
 	import List from './List.svelte';
 
@@ -12,17 +11,6 @@
 	let error = $state('');
 	let name = $state('');
 	let created = $state<DeviceCredentials | null>(null);
-	let sent = $state('');
-
-	async function send(creds: DeviceCredentials) {
-		sent = 'Pick the device’s port; it may restart…';
-		try {
-			await provision(creds.id, creds.secret);
-			sent = 'Saved on the device.';
-		} catch (err) {
-			sent = (err as Error).message;
-		}
-	}
 
 	async function load() {
 		try {
@@ -33,7 +21,6 @@
 	}
 	$effect(() => {
 		created = null; // a secret belongs to the project it was made for
-		sent = '';
 		load();
 	});
 
@@ -42,7 +29,6 @@
 		error = '';
 		try {
 			created = await api.createDevice(projectId, name);
-			sent = '';
 			name = '';
 			await load();
 			onchange();
@@ -96,16 +82,6 @@
 		<p class="font-semibold">Flash these into the device now: the secret is not shown again.</p>
 		<p class="text-xs">Device id <code class="break-all select-all">{created.id}</code></p>
 		<p class="text-xs">Secret <code class="break-all select-all">{created.secret}</code></p>
-		{#if serialSupported()}
-			{@const creds = created}
-			<p class="flex flex-wrap items-center gap-3 pt-1 text-xs">
-				<button
-					class="cursor-pointer rounded-full bg-yellow-400 px-4 py-1.5 font-semibold text-zinc-950 transition hover:bg-yellow-300"
-					onclick={() => send(creds)}>Send to device over USB</button
-				>
-				{sent}
-			</p>
-		{/if}
 	</div>
 {/if}
 {#if error}<p class="mb-4 text-sm font-semibold text-red-600" role="alert">{error}</p>{/if}
