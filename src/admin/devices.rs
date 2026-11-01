@@ -6,10 +6,14 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use std::collections::HashMap;
+
+use sqlx::SqlitePool;
+
 use super::projects::DAYS;
 use crate::{
     error::{Result, status},
-    firmware::{store, version},
+    firmware::{parse_version, store, version},
     state::{AppState, now},
 };
 
@@ -27,6 +31,50 @@ pub struct DeviceRow {
     /// Requests per day over the project page's chart window, oldest first.
     #[sqlx(skip)]
     activity: Vec<i64>,
+    #[sqlx(skip)]
+    update: Option<UpdateStatus>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct UpdateStatus {
+    pub tag: String,
+    /// When the device downloaded it.
+    at: i64,
+    /// `pending` until the device checks in again; then `succeeded` if it reports `tag`, else `failed`.
+    pub status: &'static str,
+}
+
+/// Each device's last download and what its next check said about it. Devices only report their
+/// version when they check, so a device that never checks again stays `pending`.
+pub async fn updates(
+    db: &SqlitePool,
+    project_id: i64,
+) -> sqlx::Result<HashMap<String, UpdateStatus>> {
+    let rows: Vec<(String, String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT d.device_id, d.tag, d.at,
+           (SELECT c.version FROM device_events c
+            WHERE c.device_id = d.device_id AND c.kind = 'check' AND c.version IS NOT NULL
+              AND c.id > d.id
+            ORDER BY c.id LIMIT 1)
+         FROM device_events d
+         WHERE d.project_id = ? AND d.id = (
+           SELECT MAX(id) FROM device_events
+           WHERE device_id = d.device_id AND kind = 'download' AND tag IS NOT NULL)",
+    )
+    .bind(project_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(device, tag, at, next)| {
+            let status = match next.as_deref().and_then(parse_version) {
+                None if next.is_none() => "pending",
+                Some(v) if Some(&v) == parse_version(&tag).as_ref() => "succeeded",
+                _ => "failed",
+            };
+            (device, UpdateStatus { tag, at, status })
+        })
+        .collect())
 }
 
 pub async fn list(
@@ -41,6 +89,7 @@ pub async fn list(
     .fetch_all(&state.db)
     .await?;
     let latest = store::latest_release(&state.db, project_id, false).await?;
+    let mut updates = updates(&state.db, project_id).await?;
     let first = now() / 86400 - DAYS + 1;
     let counts: Vec<(String, i64, i64)> = sqlx::query_as(
         "SELECT device_id, at / 86400 AS day, COUNT(*) FROM device_events
@@ -54,6 +103,7 @@ pub async fn list(
         row.up_to_date = latest
             .as_ref()
             .is_some_and(|(l, _)| !version::update_available(l, row.last_version.as_deref()));
+        row.update = updates.remove(&row.id);
         row.activity = vec![0; DAYS as usize];
         for (_, day, n) in counts.iter().filter(|c| c.0 == row.id) {
             if let Some(slot) = row.activity.get_mut((day - first) as usize) {

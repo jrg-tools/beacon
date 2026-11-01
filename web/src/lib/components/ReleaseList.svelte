@@ -29,6 +29,12 @@
 								>prerelease</span
 							>
 						{/if}
+						{#if release.pending}
+							<span
+								class="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-500 dark:border-zinc-700"
+								><span class="size-1.5 rounded-full bg-yellow-500"></span>{release.pending} pending</span
+							>
+						{/if}
 						{#if release.devices}
 							<span
 								class="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-500 dark:border-zinc-700"

@@ -29,6 +29,8 @@ export interface Release {
 	published_at: string;
 	/** Devices whose last reported version is this release. */
 	devices: number;
+	/** Devices that downloaded it and have not checked in since. */
+	pending: number;
 	assets: Asset[];
 }
 
@@ -43,6 +45,8 @@ export interface Device {
 	up_to_date: boolean;
 	/** Requests per day over the last 30 days, oldest first. */
 	activity: number[];
+	/** The last release it downloaded; `pending` until its next check says which version it runs. */
+	update: { tag: string; at: number; status: 'pending' | 'succeeded' | 'failed' } | null;
 }
 
 /** One UTC day of a project's device traffic. */
@@ -67,6 +71,9 @@ export interface ProjectStats {
 	downloads: number;
 	/** Version changes devices reported in the last 30 days. */
 	updates: number;
+	/** Current devices whose last download is pending or failed. */
+	updates_pending: number;
+	updates_failed: number;
 	/** Devices per channel over the last 30 days. */
 	channels: Record<string, number>;
 	/** Device count per last reported version ("unknown" if none yet). */

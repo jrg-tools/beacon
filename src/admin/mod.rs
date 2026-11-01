@@ -116,4 +116,51 @@ mod tests {
         assert_eq!(device["activity"].as_array().unwrap().last().unwrap(), 3);
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    #[tokio::test]
+    async fn update_status_follows_the_next_check() {
+        let (state, dir) = setup().await;
+        let request = |path: &'static str| {
+            let state = state.clone();
+            async move { call(&state, signed(path, "s3cret", now())).await }
+        };
+        let status = || async {
+            let devices = super::devices::list(State(state.clone()), Path(1))
+                .await
+                .ok()
+                .unwrap()
+                .0;
+            let device = serde_json::to_value(&devices[0]).unwrap();
+            let stats = super::projects::stats(State(state.clone()), Path(1))
+                .await
+                .ok()
+                .unwrap()
+                .0;
+            (
+                device["update"]["status"].as_str().map(String::from),
+                stats["updates_pending"].as_i64().unwrap(),
+                stats["updates_failed"].as_i64().unwrap(),
+            )
+        };
+        let download = "/api/v1/firmware/ab98/releases/v1.2.0/firmware.bin";
+
+        request("/api/v1/firmware/ab98/latest?current=v1.1.0").await;
+        assert_eq!(status().await, (None, 0, 0));
+        request(download).await;
+        assert_eq!(status().await, (Some("pending".into()), 1, 0));
+        let releases = super::projects::releases(State(state.clone()), Path(1))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        let v120 = releases.iter().find(|r| r["tag"] == "v1.2.0").unwrap();
+        assert_eq!(v120["pending"], 1);
+        request("/api/v1/firmware/ab98/latest?current=1.2.0").await;
+        assert_eq!(status().await, (Some("succeeded".into()), 0, 0));
+        // Downloaded again, but it came back on the old version.
+        request(download).await;
+        request("/api/v1/firmware/ab98/latest?current=v1.1.0").await;
+        assert_eq!(status().await, (Some("failed".into()), 0, 1));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

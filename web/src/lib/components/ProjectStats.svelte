@@ -20,7 +20,11 @@
 			value: stats.active_7d,
 			note: `${stats.devices - stats.active_7d} not seen`
 		},
-		{ label: 'Updates installed', value: stats.updates, note: 'last 30 days' },
+		{
+			label: 'Updates installed',
+			value: stats.updates,
+			note: `last 30 days · ${stats.updates_pending} pending · ${stats.updates_failed} failed`
+		},
 		{
 			label: 'Update checks',
 			value: sum('checks'),
@@ -60,7 +64,9 @@
 					</span>
 					<span class="h-3">
 						<span
-							class="block h-full rounded-r-[4px] bg-amber-600"
+							class="block h-full rounded-full {version === stats.latest
+								? 'bg-emerald-500'
+								: 'bg-yellow-400'}"
 							style:width="{(count / stats.devices) * 100}%"
 						></span>
 					</span>

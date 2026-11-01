@@ -123,16 +123,19 @@ pub async fn releases(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<Vec<Value>>> {
-    let installed: Vec<(Option<String>,)> =
-        sqlx::query_as("SELECT last_version FROM devices WHERE project_id = ?")
+    let devices: Vec<(Option<String>, String)> =
+        sqlx::query_as("SELECT last_version, id FROM devices WHERE project_id = ?")
             .bind(id)
             .fetch_all(&state.db)
             .await?;
     // Compared as semver, so a device reporting `1.2.0` counts for the tag `v1.2.0`.
-    let installed: Vec<_> = installed
+    let installed: Vec<_> = devices
         .iter()
-        .filter_map(|(v,)| v.as_deref().and_then(parse_version))
+        .filter_map(|(v, _)| v.as_deref().and_then(parse_version))
         .collect();
+    // Only current devices: a revoked one would stay pending forever.
+    let mut updates = super::devices::updates(&state.db, id).await?;
+    updates.retain(|device, _| devices.iter().any(|d| &d.1 == device));
     let mut out = Vec::new();
     for r in store::releases(&state.db, id).await? {
         let assets = store::release_assets(&state.db, r.id).await?;
@@ -141,7 +144,11 @@ pub async fn releases(
             .iter()
             .filter(|v| Some(*v) == version.as_ref())
             .count();
-        out.push(json!({ "tag": r.tag, "prerelease": r.prerelease, "published_at": r.published_at, "devices": devices, "assets": assets }));
+        let pending = updates
+            .values()
+            .filter(|u| u.status == "pending" && u.tag == r.tag)
+            .count();
+        out.push(json!({ "tag": r.tag, "prerelease": r.prerelease, "published_at": r.published_at, "devices": devices, "pending": pending, "assets": assets }));
     }
     Ok(Json(out))
 }
@@ -149,10 +156,13 @@ pub async fn releases(
 /// How many days of history the project page charts.
 pub const DAYS: i64 = 30;
 
+/// A device's last version, last seen, checks, downloads and id.
+type DeviceTotals = (Option<String>, Option<i64>, i64, i64, String);
+
 /// Fleet numbers and daily series for one project's page.
 pub async fn stats(State(state): State<AppState>, Path(id): Path<i64>) -> Result<Json<Value>> {
-    let devices: Vec<(Option<String>, Option<i64>, i64, i64)> = sqlx::query_as(
-        "SELECT last_version, last_seen, checks, downloads FROM devices WHERE project_id = ?",
+    let devices: Vec<DeviceTotals> = sqlx::query_as(
+        "SELECT last_version, last_seen, checks, downloads, id FROM devices WHERE project_id = ?",
     )
     .bind(id)
     .fetch_all(&state.db)
@@ -200,7 +210,7 @@ pub async fn stats(State(state): State<AppState>, Path(id): Path<i64>) -> Result
     .fetch_all(&state.db)
     .await?;
     // An update is a device reporting a different version than on its previous check.
-    let (updates,): (i64,) = sqlx::query_as(
+    let (updated,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM (
            SELECT at, version, LAG(version) OVER (PARTITION BY device_id ORDER BY at, id) AS prev
            FROM device_events WHERE project_id = ? AND kind = 'check' AND version IS NOT NULL
@@ -210,6 +220,14 @@ pub async fn stats(State(state): State<AppState>, Path(id): Path<i64>) -> Result
     .bind(since)
     .fetch_one(&state.db)
     .await?;
+
+    let updates = super::devices::updates(&state.db, id).await?;
+    let in_state = |status: &str| {
+        devices
+            .iter()
+            .filter(|d| updates.get(&d.4).is_some_and(|u| u.status == status))
+            .count()
+    };
 
     Ok(Json(json!({
         "devices": devices.len(),
@@ -221,7 +239,9 @@ pub async fn stats(State(state): State<AppState>, Path(id): Path<i64>) -> Result
         "latest": latest.map(|(_, r)| r.tag),
         "checks": devices.iter().map(|d| d.2).sum::<i64>(),
         "downloads": devices.iter().map(|d| d.3).sum::<i64>(),
-        "updates": updates,
+        "updates": updated,
+        "updates_pending": in_state("pending"),
+        "updates_failed": in_state("failed"),
         "channels": channels.into_iter().collect::<BTreeMap<_, _>>(),
         "versions": versions,
         "days": days,

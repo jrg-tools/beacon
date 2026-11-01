@@ -45,6 +45,13 @@
 			value
 		}));
 
+	// Devices report their version only when they check, so `pending` lasts until the next check.
+	const UPDATE = {
+		pending: { dot: 'bg-yellow-500', label: 'waiting for the device to report back' },
+		succeeded: { dot: 'bg-emerald-500', label: 'installed' },
+		failed: { dot: 'bg-red-500', label: 'failed, still on the old version' }
+	};
+
 	async function revoke(device: Device) {
 		if (!confirm(`Revoke ${device.name}? It will no longer get updates.`)) return;
 		await api.deleteDevice(device.id).catch((err) => (error = err.message));
@@ -102,6 +109,17 @@
 						{device.id} · seen {ago(device.last_seen)} · {device.checks} checks · {device.downloads}
 						downloads
 					</p>
+					{#if device.update}
+						{@const update = UPDATE[device.update.status]}
+						<p class="flex min-w-0 items-center gap-1.5 text-xs text-zinc-500">
+							<span class="size-1.5 shrink-0 rounded-full {update.dot}"></span>
+							<span class="truncate"
+								>Update to {device.update.tag}: {update.label} · downloaded {ago(
+									device.update.at
+								)}</span
+							>
+						</p>
+					{/if}
 				</div>
 				<div class="w-24 shrink-0">
 					<BarChart title="{device.name}: requests per day" data={activity(device)} />

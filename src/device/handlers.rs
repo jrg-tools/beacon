@@ -24,13 +24,14 @@ enum Seen<'a> {
     },
     Download {
         bytes: i64,
+        tag: &'a str,
     },
 }
 
 async fn seen(state: &AppState, device: &Device, what: Seen<'_>) -> Result<()> {
-    let (kind, version, channel, bytes) = match what {
-        Seen::Check { version, channel } => ("check", version, Some(channel), None),
-        Seen::Download { bytes } => ("download", None, None, Some(bytes)),
+    let (kind, version, channel, bytes, tag) = match what {
+        Seen::Check { version, channel } => ("check", version, Some(channel), None, None),
+        Seen::Download { bytes, tag } => ("download", None, None, Some(bytes), Some(tag)),
     };
     let check = kind == "check";
     let at = now();
@@ -46,8 +47,8 @@ async fn seen(state: &AppState, device: &Device, what: Seen<'_>) -> Result<()> {
     .execute(&state.db)
     .await?;
     sqlx::query(
-        "INSERT INTO device_events (project_id, device_id, at, kind, version, channel, bytes)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO device_events (project_id, device_id, at, kind, version, channel, bytes, tag)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(device.project_id)
     .bind(&device.id)
@@ -56,6 +57,7 @@ async fn seen(state: &AppState, device: &Device, what: Seen<'_>) -> Result<()> {
     .bind(version)
     .bind(channel)
     .bind(bytes)
+    .bind(tag)
     .execute(&state.db)
     .await?;
     Ok(())
@@ -131,7 +133,7 @@ pub async fn download(
         .await?
         .ok_or(status(StatusCode::NOT_FOUND, "no such asset"))?;
     let bytes = asset.size;
-    seen(&state, &device, Seen::Download { bytes }).await?;
+    seen(&state, &device, Seen::Download { bytes, tag: &tag }).await?;
     let asset = cached(&state, &device, asset).await?;
     let file = tokio::fs::File::open(cache::path(&state, asset.github_id)).await?;
     let headers = [
