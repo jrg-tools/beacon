@@ -2,7 +2,7 @@
 // The commands are the firmware's BeaconSerial.h; replies start with "beacon:" amid the board's log.
 
 // Web Serial is not in TypeScript's DOM types; just what this file uses.
-interface SerialPort {
+export interface SerialPort {
 	readonly readable: ReadableStream<Uint8Array>;
 	readonly writable: WritableStream<Uint8Array>;
 	open(options: { baudRate: number }): Promise<void>;
@@ -14,9 +14,15 @@ export const hasSerial = () => typeof navigator !== 'undefined' && 'serial' in n
 
 /** Asks the browser for a port; rejects with a `NotFoundError` DOMException if none is picked. */
 export async function connect() {
-	const serial = (navigator as Navigator & { serial: { requestPort(): Promise<SerialPort> } })
-		.serial;
-	const port = await serial.requestPort();
+	const serial = (
+		navigator as Navigator & {
+			serial: { requestPort(options: { filters: { usbVendorId: number }[] }): Promise<SerialPort> };
+		}
+	).serial;
+	// Only ESP32 boards: Espressif's native USB, plus the USB-UART chips dev boards use (CP210x, CH34x, FTDI).
+	const port = await serial.requestPort({
+		filters: [0x303a, 0x10c4, 0x1a86, 0x0403].map((usbVendorId) => ({ usbVendorId }))
+	});
 	await port.open({ baudRate: 115200 });
 	// The ESP32-S3's USB port resets the chip when RTS is on and DTR off, so RTS goes first.
 	await port.setSignals({ requestToSend: false });
@@ -51,6 +57,8 @@ export async function connect() {
 	}
 
 	return {
+		/** For esptool once this session is closed: it reopens the port itself. */
+		port,
 		/**
 		 * Sends `command` every 2 s (a board that was just reset misses it) until a line holding
 		 * `reply` arrives, and returns what follows `reply`. Commands must be safe to repeat.

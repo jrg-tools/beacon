@@ -75,6 +75,7 @@
 					</p>
 				</div>
 				<a href="{resolve('/')}?project={project.id}" class="action">Edit</a>
+				<a href="{resolve('/firmware')}?id={project.id}" class="action">Install</a>
 			</header>
 		{/if}
 	</div>

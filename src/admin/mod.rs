@@ -36,6 +36,11 @@ pub fn router(state: AppState, ui_dir: &Path) -> Router<AppState> {
             "/projects/{id}/devices",
             get(devices::list).post(devices::create),
         )
+        .route("/projects/{id}/devices/verify", post(devices::verify))
+        .route(
+            "/projects/{id}/releases/{tag}/{asset}",
+            get(projects::asset),
+        )
         .route("/devices/{id}", delete(devices::remove))
         .route_layer(middleware::from_fn_with_state(state, auth::require_admin))
         // Public: the page needs the key before anyone can sign in.
@@ -189,6 +194,39 @@ mod tests {
         let id = created["id"].as_str().unwrap().parse().unwrap();
         req.headers_mut().insert("x-beacon-device", id);
         assert_eq!(call(&state, req).await.0, axum::http::StatusCode::OK);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn verify_needs_the_device_key_and_project() {
+        let (state, dir) = setup().await;
+        let nonce = "0123456789abcdef";
+        let sign = |key: [u8; 32], message: &str| {
+            hex::encode(
+                aws_lc_rs::signature::Ed25519KeyPair::from_seed_unchecked(&key)
+                    .unwrap()
+                    .sign(message.as_bytes()),
+            )
+        };
+        let verify = |project: i64, signature: String| {
+            let proof = serde_json::from_value(
+                serde_json::json!({ "device": "dev_1", "nonce": nonce, "signature": signature }),
+            );
+            super::devices::verify(
+                State(state.clone()),
+                Path(project),
+                axum::Json(proof.unwrap()),
+            )
+        };
+        let good = sign(KEY, &super::devices::whoami_message(nonce));
+        assert!(verify(1, good.clone()).await.is_ok());
+        assert!(verify(2, good).await.is_err()); // another project's device
+        assert!(
+            verify(1, sign([9; 32], &super::devices::whoami_message(nonce)))
+                .await
+                .is_err()
+        );
+        assert!(verify(1, sign(KEY, nonce)).await.is_err()); // no prefix
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

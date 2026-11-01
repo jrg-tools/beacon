@@ -40,6 +40,23 @@ registers the public key (`POST /admin/api/projects/{id}/devices {name, public_k
 and sends the device the id it gets back. Firmware side: `src/network/BeaconSerial.cpp` in AB98 and
 mayanhcu.
 
+## Installing over USB
+
+**Install** on the project page opens `/admin/firmware?id=<project>`: pick a version, plug the board in
+and click **Connect and install**. Before writing anything the page sends
+
+```
+> beacon whoami <nonce>     < beacon:whoami <nonce> <dev_...> <signature hex>   (or "none")
+```
+
+and the server checks the signature over `beacon whoami\n<nonce>` against that device's public key
+(`POST /admin/api/projects/{id}/devices/verify`); a board that is not a registered device of this
+project is refused. The page then downloads the release's assets
+(`GET /admin/api/projects/{id}/releases/{tag}/{asset}`) and flashes them with esptool-js, using the
+board's own partition table: the app to factory/ota_0, the filesystem image to the SPIFFS/LittleFS
+partition, and otadata is blanked so the new app boots. NVS (WiFi, the Beacon key and id) is kept.
+Boards on firmware older than `beacon whoami` need one over-the-air update first.
+
 ## Device API
 
 Every request carries three headers, signed with the device's Ed25519 private key. The device makes

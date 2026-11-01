@@ -1,4 +1,4 @@
-use aws_lc_rs::signature::{ED25519, ParsedPublicKey};
+use aws_lc_rs::signature::{ED25519, ParsedPublicKey, UnparsedPublicKey};
 use axum::{
     Json,
     extract::{Path, State},
@@ -156,6 +156,50 @@ pub async fn create(
         return Err(status(StatusCode::NOT_FOUND, "no such project"));
     }
     Ok(Json(json!({ "id": id })))
+}
+
+/// What a board signs to prove it holds a registered key; the prefix keeps it from ever reading as
+/// a device API request.
+pub fn whoami_message(nonce: &str) -> String {
+    format!("beacon whoami\n{nonce}")
+}
+
+#[derive(Deserialize)]
+pub struct Proof {
+    device: String,
+    nonce: String,
+    signature: String,
+}
+
+/// Checks that the board on the admin's USB port is a device of this project, by its signature
+/// over a nonce the page picked (`beacon whoami` in the firmware).
+pub async fn verify(
+    State(state): State<AppState>,
+    Path(project_id): Path<i64>,
+    Json(proof): Json<Proof>,
+) -> Result<Json<Value>> {
+    let denied = || {
+        status(
+            StatusCode::FORBIDDEN,
+            "this device is not registered to this project: sync it first",
+        )
+    };
+    if proof.nonce.len() < 16 {
+        return Err(status(StatusCode::BAD_REQUEST, "nonce too short"));
+    }
+    let (name, public_key): (String, String) =
+        sqlx::query_as("SELECT name, public_key FROM devices WHERE id = ? AND project_id = ?")
+            .bind(&proof.device)
+            .bind(project_id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(denied)?;
+    let key = hex::decode(public_key).map_err(|_| denied())?;
+    let sig = hex::decode(&proof.signature).map_err(|_| denied())?;
+    UnparsedPublicKey::new(&ED25519, key)
+        .verify(whoami_message(&proof.nonce).as_bytes(), &sig)
+        .map_err(|_| denied())?;
+    Ok(Json(json!({ "id": proof.device, "name": name })))
 }
 
 pub async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode> {

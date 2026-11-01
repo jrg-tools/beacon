@@ -13,7 +13,7 @@ export class ApiError extends Error {
 }
 
 /** Calls the Rust admin API with the Clerk session token; errors carry the server's message. */
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function call(path: string, init: RequestInit = {}): Promise<Response> {
 	const token = await window.Clerk?.session?.getToken();
 	const res = await fetch(`${API}${path}`, {
 		...init,
@@ -23,6 +23,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 		const body = await res.json().catch(() => ({}));
 		throw new ApiError(body.error ?? res.statusText, res.status);
 	}
+	return res;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+	const res = await call(path, init);
 	return (res.status === 202 || res.status === 204 ? null : await res.json()) as T;
 }
 
@@ -51,6 +56,17 @@ export const api = {
 		request<{ id: string }>(
 			`/projects/${id}/devices`,
 			send('POST', { name, public_key: publicKey })
+		),
+	/** Checks a board's `beacon whoami` signature; rejects with 403 if it is not this project's. */
+	verifyDevice: (id: number, proof: { device: string; nonce: string; signature: string }) =>
+		request<{ id: string; name: string }>(`/projects/${id}/devices/verify`, send('POST', proof)),
+	asset: async (id: number, tag: string, name: string) =>
+		new Uint8Array(
+			await (
+				await call(
+					`/projects/${id}/releases/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`
+				)
+			).arrayBuffer()
 		),
 	deleteDevice: (id: string) => request<null>(`/devices/${id}`, send('DELETE'))
 };
