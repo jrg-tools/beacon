@@ -12,7 +12,7 @@
 	let error = $state('');
 
 	// As jrg-life's `?edit=`: the open project lives in the URL.
-	const selected = $derived(Number(page.url.searchParams.get('project')) || null);
+	const selected = $derived(page.url.searchParams.get('project'));
 	const project = $derived(projects.find((p) => p.id === selected));
 
 	async function load() {

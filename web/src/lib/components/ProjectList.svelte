@@ -7,7 +7,7 @@
 
 	interface Props {
 		projects: Project[];
-		selected: number | null;
+		selected: string | null;
 		onchange: () => void;
 		onerror: (message: string) => void;
 	}

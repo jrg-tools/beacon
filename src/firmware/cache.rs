@@ -38,7 +38,7 @@ pub async fn ensure(state: &AppState, repo: &str, asset: AssetRow) -> anyhow::Re
     }
     // shortcut: one download at a time across all assets; fine for a handful of projects.
     let _guard = state.fetch_lock.lock().await;
-    let mut asset = store::asset(&state.db, asset.id).await?;
+    let mut asset = store::asset(&state.db, &asset.id).await?;
     if is_cached(state, &asset).await? {
         return Ok(asset); // another request fetched it while we waited
     }
@@ -57,7 +57,7 @@ pub async fn ensure(state: &AppState, repo: &str, asset: AssetRow) -> anyhow::Re
         let _ = fs::remove_file(path(state, asset.github_id)).await;
         anyhow::bail!("{} from {repo} does not match GitHub's digest", asset.name);
     }
-    store::set_hashes(&state.db, asset.id, &sha256, &md5).await?;
+    store::set_hashes(&state.db, &asset.id, &sha256, &md5).await?;
     asset.sha256 = Some(sha256);
     asset.md5 = Some(md5);
     read_image(state, asset).await
@@ -72,7 +72,7 @@ async fn read_image(state: &AppState, mut asset: AssetRow) -> anyhow::Result<Ass
         .read_to_end(&mut head)
         .await?;
     (asset.chip, asset.app_sha) = store::image(&head);
-    store::set_image(&state.db, asset.id, asset.chip, asset.app_sha.as_deref()).await?;
+    store::set_image(&state.db, &asset.id, asset.chip, asset.app_sha.as_deref()).await?;
     Ok(asset)
 }
 
@@ -139,9 +139,9 @@ pub async fn remove_orphans(state: &AppState) -> anyhow::Result<()> {
 /// Deletes the cached files of the project's releases that no device runs and that are not the
 /// newest (stable or beta): nobody is about to download them. A device that still asks for one
 /// gets it fetched from GitHub again, like any uncached asset.
-pub async fn remove_unused(state: &AppState, project_id: i64) -> anyhow::Result<()> {
+pub async fn remove_unused(state: &AppState, project_id: &str) -> anyhow::Result<()> {
     let releases = store::releases(&state.db, project_id).await?;
-    let newest: HashSet<i64> = [false, true]
+    let newest: HashSet<String> = [false, true]
         .into_iter()
         .filter_map(|beta| pick_latest(releases.clone(), beta).map(|(_, r)| r.id))
         .collect();
@@ -161,7 +161,7 @@ pub async fn remove_unused(state: &AppState, project_id: i64) -> anyhow::Result<
         if newest.contains(&release.id) || in_use {
             continue;
         }
-        for asset in store::release_assets(&state.db, release.id).await? {
+        for asset in store::release_assets(&state.db, &release.id).await? {
             if asset.sha256.is_none() {
                 continue;
             }
@@ -170,7 +170,7 @@ pub async fn remove_unused(state: &AppState, project_id: i64) -> anyhow::Result<
                 asset = asset.name,
                 "evicting unused asset"
             );
-            store::clear_hashes(&state.db, asset.id).await?;
+            store::clear_hashes(&state.db, &asset.id).await?;
             // A download streaming this file keeps its open handle.
             match fs::remove_file(path(state, asset.github_id)).await {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
@@ -190,7 +190,7 @@ mod tests {
         let (state, dir) = setup().await;
         for sql in [
             "INSERT INTO releases (id, project_id, tag, prerelease, notes, published_at) VALUES (3, 1, 'v1.1.0', 0, 'n', '')",
-            "INSERT INTO assets (release_id, name, github_id, size, sha256, md5) VALUES (3, 'firmware.bin', 66, 5, 'cc', 'dd')",
+            "INSERT INTO assets (id, release_id, name, github_id, size, sha256, md5) VALUES (3, 3, 'firmware.bin', 66, 5, 'cc', 'dd')",
         ] {
             sqlx::query(sql).execute(&state.db).await.unwrap();
         }
@@ -202,7 +202,7 @@ mod tests {
             .execute(&state.db)
             .await
             .unwrap();
-        super::remove_unused(&state, 1).await.unwrap();
+        super::remove_unused(&state, "1").await.unwrap();
         assert!(cached(66) && cached(77));
 
         // Once it moves on, only the newest (v1.2.0) stays.
@@ -210,7 +210,7 @@ mod tests {
             .execute(&state.db)
             .await
             .unwrap();
-        super::remove_unused(&state, 1).await.unwrap();
+        super::remove_unused(&state, "1").await.unwrap();
         assert!(!cached(66) && cached(77));
         let (sha,): (Option<String>,) =
             sqlx::query_as("SELECT sha256 FROM assets WHERE github_id = 66")

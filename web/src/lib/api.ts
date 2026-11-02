@@ -60,19 +60,19 @@ export const api = {
 	/** One project by slug, or null. */
 	project: (slug: string) =>
 		request<Project[]>(`/projects?slug=${encodeURIComponent(slug)}`).then(([p]) => p ?? null),
-	createProject: (p: ProjectInput) => request<{ id: number }>('/projects', send('POST', p)),
-	updateProject: (id: number, p: ProjectInput) => request<null>(`/projects/${id}`, send('PUT', p)),
-	deleteProject: (id: number) => request<null>(`/projects/${id}`, send('DELETE')),
-	syncProject: (id: number) => request<null>(`/projects/${id}/sync`, send('POST')),
-	releases: (id: number) => request<Release[]>(`/projects/${id}/releases`),
+	createProject: (p: ProjectInput) => request<{ id: string }>('/projects', send('POST', p)),
+	updateProject: (id: string, p: ProjectInput) => request<null>(`/projects/${id}`, send('PUT', p)),
+	deleteProject: (id: string) => request<null>(`/projects/${id}`, send('DELETE')),
+	syncProject: (id: string) => request<null>(`/projects/${id}/sync`, send('POST')),
+	releases: (id: string) => request<Release[]>(`/projects/${id}/releases`),
 	/** Any release file, first-flash ones included (src/admin/projects.rs `download`). */
-	download: (id: number, tag: string, name: string) =>
+	download: (id: string, tag: string, name: string) =>
 		call(`${API}/projects/${id}/releases/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`)
 			.then((res) => res.arrayBuffer())
 			.then((buffer) => new Uint8Array(buffer)),
-	stats: (id: number) => request<ProjectStats>(`/projects/${id}/stats`),
-	devices: (id: number) => request<Device[]>(`/projects/${id}/devices`),
-	createDevice: (id: number, name: string, publicKey: string) =>
+	stats: (id: string) => request<ProjectStats>(`/projects/${id}/stats`),
+	devices: (id: string) => request<Device[]>(`/projects/${id}/devices`),
+	createDevice: (id: string, name: string, publicKey: string) =>
 		request<{ id: string }>(
 			`/projects/${id}/devices`,
 			send('POST', { name, public_key: publicKey })
@@ -118,7 +118,7 @@ export async function deviceGet(
  */
 export async function register(
 	board: { ask(command: string, reply: string): Promise<string> },
-	projectId: number,
+	projectId: string,
 	name: string
 ): Promise<string> {
 	const nonce = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) =>

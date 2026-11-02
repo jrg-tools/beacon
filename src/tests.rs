@@ -20,8 +20,8 @@ const FIXTURES: [&str; 7] = [
     "INSERT INTO projects (id, slug, name, repo, assets, created_at) VALUES (2, 'cam', 'Cam', 'o/cam', 'firmware.bin', 0)",
     "INSERT INTO releases (id, project_id, tag, prerelease, notes, published_at) VALUES (1, 1, 'v1.2.0', 0, 'n', '')",
     "INSERT INTO releases (id, project_id, tag, prerelease, notes, published_at) VALUES (2, 1, 'v1.3.0-rc1', 1, 'n', '')",
-    "INSERT INTO assets (release_id, name, github_id, size, sha256, md5) VALUES (1, 'firmware.bin', 77, 5, 'aa', 'bb')",
-    "INSERT INTO assets (release_id, name, github_id, size, sha256, md5) VALUES (1, 'bootloader.bin', 78, 4, 'cc', 'dd')",
+    "INSERT INTO assets (id, release_id, name, github_id, size, sha256, md5) VALUES (1, 1, 'firmware.bin', 77, 5, 'aa', 'bb')",
+    "INSERT INTO assets (id, release_id, name, github_id, size, sha256, md5) VALUES (2, 1, 'bootloader.bin', 78, 4, 'cc', 'dd')",
     "INSERT INTO devices (id, project_id, name, created_at) VALUES ('dev_1', 1, 'desk', 0)",
 ];
 

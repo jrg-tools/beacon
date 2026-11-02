@@ -52,6 +52,11 @@ impl State {
     }
 }
 
+/// A new row id: time-ordered, so `ORDER BY id` is insertion order.
+pub fn uuid() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
 /// Unix seconds, the format of every timestamp in the database and the device signature.
 pub fn now() -> i64 {
     SystemTime::now()

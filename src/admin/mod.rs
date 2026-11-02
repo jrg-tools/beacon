@@ -81,7 +81,7 @@ mod tests {
             call(&state, signed(path, KEY, now())).await;
         }
 
-        let stats = super::stats::stats(State(state.clone()), Path(1))
+        let stats = super::stats::stats(State(state.clone()), Path("1".into()))
             .await
             .ok()
             .unwrap()
@@ -105,7 +105,7 @@ mod tests {
             (5.into(), 1.into())
         );
 
-        let releases = super::projects::releases(State(state.clone()), Path(1))
+        let releases = super::projects::releases(State(state.clone()), Path("1".into()))
             .await
             .ok()
             .unwrap()
@@ -117,7 +117,7 @@ mod tests {
         installed.sort(); // both fixtures share a publish date
         assert_eq!(installed, [("v1.2.0", 1), ("v1.3.0-rc1", 0)]);
 
-        let devices = super::devices::list(State(state.clone()), Path(1))
+        let devices = super::devices::list(State(state.clone()), Path("1".into()))
             .await
             .ok()
             .unwrap()
@@ -139,13 +139,13 @@ mod tests {
             async move { call(&state, signed(path, KEY, ts)).await }
         };
         let status = || async {
-            let devices = super::devices::list(State(state.clone()), Path(1))
+            let devices = super::devices::list(State(state.clone()), Path("1".into()))
                 .await
                 .ok()
                 .unwrap()
                 .0;
             let device = serde_json::to_value(&devices[0]).unwrap();
-            let stats = super::stats::stats(State(state.clone()), Path(1))
+            let stats = super::stats::stats(State(state.clone()), Path("1".into()))
                 .await
                 .ok()
                 .unwrap()
@@ -162,7 +162,7 @@ mod tests {
         assert_eq!(status().await, (None, 0, 0));
         request(download).await;
         assert_eq!(status().await, (Some("pending".into()), 1, 0));
-        let releases = super::projects::releases(State(state.clone()), Path(1))
+        let releases = super::projects::releases(State(state.clone()), Path("1".into()))
             .await
             .ok()
             .unwrap()
@@ -182,7 +182,7 @@ mod tests {
     async fn first_flash_downloads_any_file() {
         let (state, dir) = setup().await;
         let download = |name: &str| {
-            let path = Path((1, "v1.2.0".to_string(), name.to_string()));
+            let path = Path(("1".into(), "v1.2.0".to_string(), name.to_string()));
             super::projects::download(State(state.clone()), path)
         };
         let res = download("bootloader.bin").await.ok().unwrap();
@@ -214,7 +214,11 @@ mod tests {
             let input = serde_json::from_value(
                 serde_json::json!({ "name": "new", "public_key": public_key }),
             );
-            super::devices::create(State(state.clone()), Path(1), axum::Json(input.unwrap()))
+            super::devices::create(
+                State(state.clone()),
+                Path("1".into()),
+                axum::Json(input.unwrap()),
+            )
         };
         assert!(create("not hex".into()).await.is_err());
         assert!(create("00".into()).await.is_err());
@@ -249,7 +253,7 @@ mod tests {
         assert!(rename("dev_1", "  ").await.is_err());
         assert!(rename("dev_nope", "x").await.is_err());
         assert!(rename("dev_1", " shelf ").await.is_ok());
-        let devices = super::devices::list(State(state.clone()), Path(1))
+        let devices = super::devices::list(State(state.clone()), Path("1".into()))
             .await
             .ok()
             .unwrap()

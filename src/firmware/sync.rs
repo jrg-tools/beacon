@@ -5,18 +5,18 @@ use std::{collections::HashSet, time::Duration};
 use sqlx::{Sqlite, Transaction};
 
 use super::{cache, parse_version, store};
-use crate::{github, state::AppState, state::now};
+use crate::{github, state::AppState, state::now, state::uuid};
 
 #[derive(sqlx::FromRow)]
 struct Project {
-    id: i64,
+    id: String,
     repo: String,
     assets: String,
     first_flash: String,
 }
 
 /// Syncs one project and records the outcome on it, so the admin page can show failures.
-pub async fn project(state: &AppState, project_id: i64) -> anyhow::Result<()> {
+pub async fn project(state: &AppState, project_id: String) -> anyhow::Result<()> {
     let _guard = state.sync_lock.lock().await;
     let project: Project =
         sqlx::query_as("SELECT id, repo, assets, first_flash FROM projects WHERE id = ?")
@@ -30,14 +30,14 @@ pub async fn project(state: &AppState, project_id: i64) -> anyhow::Result<()> {
     sqlx::query("UPDATE projects SET synced_at = ?, sync_error = ? WHERE id = ?")
         .bind(now())
         .bind(result.as_ref().err().map(|e| format!("{e:#}")))
-        .bind(project.id)
+        .bind(&project.id)
         .execute(&state.db)
         .await?;
     result
 }
 
 /// Runs in the background in the admin API: GitHub and first downloads can take a while.
-pub fn spawn(state: AppState, project_id: i64) {
+pub fn spawn(state: AppState, project_id: String) {
     tokio::spawn(async move {
         let _ = project(&state, project_id).await; // logged and stored on the project
     });
@@ -51,7 +51,7 @@ pub async fn every(state: AppState, period: Duration) {
         if let Err(e) = prune(&state).await {
             tracing::error!("pruning: {e}");
         }
-        match sqlx::query_as::<_, (i64,)>("SELECT id FROM projects")
+        match sqlx::query_as::<_, (String,)>("SELECT id FROM projects")
             .fetch_all(&state.db)
             .await
         {
@@ -105,24 +105,24 @@ async fn run(state: &AppState, project: &Project) -> anyhow::Result<()> {
         if release.draft || !updatable || parse_version(&release.tag_name).is_none() {
             continue;
         }
-        upsert_release(&mut tx, project.id, release, &assets).await?;
+        upsert_release(&mut tx, &project.id, release, &assets).await?;
         kept_tags.push(release.tag_name.as_str());
     }
     // Releases deleted on GitHub (or older than the 30 fetched) stop being offered.
     sqlx::query(
         "DELETE FROM releases WHERE project_id = ? AND tag NOT IN (SELECT value FROM json_each(?))",
     )
-    .bind(project.id)
+    .bind(&project.id)
     .bind(serde_json::to_string(&kept_tags)?)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
 
     cache::remove_orphans(state).await?;
-    cache::remove_unused(state, project.id).await?;
+    cache::remove_unused(state, &project.id).await?;
     // Warm the cache with what devices will ask for next.
-    if let Some((_, release)) = store::latest_release(&state.db, project.id, false).await? {
-        for asset in store::release_assets(&state.db, release.id).await? {
+    if let Some((_, release)) = store::latest_release(&state.db, &project.id, false).await? {
+        for asset in store::release_assets(&state.db, &release.id).await? {
             cache::ensure(state, &project.repo, asset).await?;
         }
     }
@@ -131,16 +131,18 @@ async fn run(state: &AppState, project: &Project) -> anyhow::Result<()> {
 
 async fn upsert_release(
     tx: &mut Transaction<'_, Sqlite>,
-    project_id: i64,
+    project_id: &str,
     release: &github::Release,
     assets: &[&github::Asset],
 ) -> anyhow::Result<()> {
-    let (release_id,): (i64,) = sqlx::query_as(
-        "INSERT INTO releases (project_id, tag, prerelease, notes, published_at) VALUES (?, ?, ?, ?, ?)
+    // On conflict the existing id is kept, and returned.
+    let (release_id,): (String,) = sqlx::query_as(
+        "INSERT INTO releases (id, project_id, tag, prerelease, notes, published_at) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT (project_id, tag) DO UPDATE SET
            prerelease = excluded.prerelease, notes = excluded.notes, published_at = excluded.published_at
          RETURNING id",
     )
+    .bind(uuid())
     .bind(project_id)
     .bind(&release.tag_name)
     .bind(release.prerelease)
@@ -151,7 +153,7 @@ async fn upsert_release(
     for asset in assets {
         // A re-uploaded asset has a new GitHub id: forget the old hashes.
         sqlx::query(
-            "INSERT INTO assets (release_id, name, github_id, size, digest) VALUES (?, ?, ?, ?, ?)
+            "INSERT INTO assets (id, release_id, name, github_id, size, digest) VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT (release_id, name) DO UPDATE SET
                sha256 = CASE WHEN github_id = excluded.github_id THEN sha256 END,
                md5 = CASE WHEN github_id = excluded.github_id THEN md5 END,
@@ -159,7 +161,8 @@ async fn upsert_release(
                app_sha = CASE WHEN github_id = excluded.github_id THEN app_sha END,
                github_id = excluded.github_id, size = excluded.size, digest = excluded.digest",
         )
-        .bind(release_id)
+        .bind(uuid())
+        .bind(&release_id)
         .bind(&asset.name)
         .bind(asset.id)
         .bind(asset.size)

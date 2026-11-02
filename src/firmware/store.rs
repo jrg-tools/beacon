@@ -8,8 +8,8 @@ use super::version::pick_latest;
 
 #[derive(sqlx::FromRow, Clone)]
 pub struct ReleaseRow {
-    pub id: i64,
-    pub project_id: i64,
+    pub id: String,
+    pub project_id: String,
     pub tag: String,
     pub prerelease: bool,
     pub notes: String,
@@ -19,9 +19,9 @@ pub struct ReleaseRow {
 #[derive(sqlx::FromRow, Serialize, Clone)]
 pub struct AssetRow {
     #[serde(skip)]
-    pub id: i64,
+    pub id: String,
     #[serde(skip)]
-    pub release_id: i64,
+    pub release_id: String,
     pub name: String,
     #[serde(skip)]
     pub github_id: i64,
@@ -55,7 +55,7 @@ pub fn first_flash_names(first_flash: &str) -> impl Iterator<Item = &str> {
         .map(|(name, _)| name)
 }
 
-pub async fn releases(db: &SqlitePool, project_id: i64) -> sqlx::Result<Vec<ReleaseRow>> {
+pub async fn releases(db: &SqlitePool, project_id: &str) -> sqlx::Result<Vec<ReleaseRow>> {
     sqlx::query_as(
         "SELECT id, project_id, tag, prerelease, notes, published_at FROM releases
          WHERE project_id = ? ORDER BY published_at DESC",
@@ -76,13 +76,13 @@ pub async fn all_releases(db: &SqlitePool) -> sqlx::Result<Vec<ReleaseRow>> {
 
 pub async fn latest_release(
     db: &SqlitePool,
-    project_id: i64,
+    project_id: &str,
     beta: bool,
 ) -> sqlx::Result<Option<(Version, ReleaseRow)>> {
     Ok(pick_latest(releases(db, project_id).await?, beta))
 }
 
-pub async fn release_assets(db: &SqlitePool, release_id: i64) -> sqlx::Result<Vec<AssetRow>> {
+pub async fn release_assets(db: &SqlitePool, release_id: &str) -> sqlx::Result<Vec<AssetRow>> {
     sqlx::query_as(assets!("WHERE a.release_id = ? ORDER BY a.name"))
         .bind(release_id)
         .fetch_all(db)
@@ -90,7 +90,7 @@ pub async fn release_assets(db: &SqlitePool, release_id: i64) -> sqlx::Result<Ve
 }
 
 /// Every asset of the project's releases in one query; pick a release's out by `release_id`.
-pub async fn project_assets(db: &SqlitePool, project_id: i64) -> sqlx::Result<Vec<AssetRow>> {
+pub async fn project_assets(db: &SqlitePool, project_id: &str) -> sqlx::Result<Vec<AssetRow>> {
     sqlx::query_as(assets!(
         "JOIN releases r ON r.id = a.release_id WHERE r.project_id = ? ORDER BY a.name"
     ))
@@ -99,7 +99,7 @@ pub async fn project_assets(db: &SqlitePool, project_id: i64) -> sqlx::Result<Ve
     .await
 }
 
-pub async fn asset(db: &SqlitePool, id: i64) -> sqlx::Result<AssetRow> {
+pub async fn asset(db: &SqlitePool, id: &str) -> sqlx::Result<AssetRow> {
     sqlx::query_as(assets!("WHERE a.id = ?"))
         .bind(id)
         .fetch_one(db)
@@ -108,7 +108,7 @@ pub async fn asset(db: &SqlitePool, id: i64) -> sqlx::Result<AssetRow> {
 
 pub async fn find_asset(
     db: &SqlitePool,
-    project_id: i64,
+    project_id: &str,
     tag: &str,
     name: &str,
 ) -> sqlx::Result<Option<AssetRow>> {
@@ -123,7 +123,7 @@ pub async fn find_asset(
 }
 
 /// Marks the asset as not cached; the next request downloads and hashes it again.
-pub async fn clear_hashes(db: &SqlitePool, id: i64) -> sqlx::Result<()> {
+pub async fn clear_hashes(db: &SqlitePool, id: &str) -> sqlx::Result<()> {
     sqlx::query("UPDATE assets SET sha256 = NULL, md5 = NULL WHERE id = ?")
         .bind(id)
         .execute(db)
@@ -131,7 +131,7 @@ pub async fn clear_hashes(db: &SqlitePool, id: i64) -> sqlx::Result<()> {
     Ok(())
 }
 
-pub async fn set_hashes(db: &SqlitePool, id: i64, sha256: &str, md5: &str) -> sqlx::Result<()> {
+pub async fn set_hashes(db: &SqlitePool, id: &str, sha256: &str, md5: &str) -> sqlx::Result<()> {
     sqlx::query("UPDATE assets SET sha256 = ?, md5 = ? WHERE id = ?")
         .bind(sha256)
         .bind(md5)
@@ -143,7 +143,7 @@ pub async fn set_hashes(db: &SqlitePool, id: i64, sha256: &str, md5: &str) -> sq
 
 pub async fn set_image(
     db: &SqlitePool,
-    id: i64,
+    id: &str,
     chip: Option<i64>,
     app_sha: Option<&str>,
 ) -> sqlx::Result<()> {

@@ -1,7 +1,7 @@
 /** The shapes the Rust admin API returns (src/admin/*.rs). */
 
 export interface Project {
-	id: number;
+	id: string;
 	slug: string;
 	name: string;
 	emoji: string;

@@ -31,7 +31,7 @@ async fn project(
     headers: HeaderMap,
 ) -> Result<Json<Value>> {
     let not_found = || status(StatusCode::NOT_FOUND, "no such project");
-    let (name, emoji, id, mut first_flash, public): (String, String, i64, String, bool) =
+    let (name, emoji, id, mut first_flash, public): (String, String, String, String, bool) =
         sqlx::query_as("SELECT name, emoji, id, first_flash, public FROM projects WHERE slug = ?")
             .bind(&slug)
             .fetch_optional(&state.db)
@@ -48,12 +48,12 @@ async fn project(
     } else {
         std::mem::take(&mut first_flash)
     };
-    let latest = store::latest_release(&state.db, id, false)
+    let latest = store::latest_release(&state.db, &id, false)
         .await?
         .map(|(_, r)| r.tag);
-    let assets = store::project_assets(&state.db, id).await?;
+    let assets = store::project_assets(&state.db, &id).await?;
     let mut releases = Vec::new();
-    for r in store::releases(&state.db, id).await? {
+    for r in store::releases(&state.db, &id).await? {
         let assets: Vec<Value> = assets
             .iter()
             .filter(|a| a.release_id == r.id)

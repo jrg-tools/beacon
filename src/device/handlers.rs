@@ -46,10 +46,11 @@ async fn seen(state: &AppState, device: &Device, what: Seen<'_>) -> Result<()> {
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "INSERT INTO device_events (project_id, device_id, at, kind, version, channel, bytes, tag)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO device_events (id, project_id, device_id, at, kind, version, channel, bytes, tag)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(device.project_id)
+    .bind(crate::state::uuid())
+    .bind(&device.project_id)
     .bind(&device.id)
     .bind(at)
     .bind(if check { "check" } else { "download" })
@@ -86,11 +87,11 @@ pub async fn latest(
         return Err(status(StatusCode::BAD_REQUEST, "current is too long"));
     }
     seen(&state, &device, Seen::Check { version, channel }).await?;
-    let (version, release) = store::latest_release(&state.db, device.project_id, beta)
+    let (version, release) = store::latest_release(&state.db, &device.project_id, beta)
         .await?
         .ok_or(status(StatusCode::NOT_FOUND, "no release"))?;
     let mut assets = Vec::new();
-    for mut asset in store::release_assets(&state.db, release.id).await? {
+    for mut asset in store::release_assets(&state.db, &release.id).await? {
         // Bootloader and partition table: written once by the first flash, never as an update.
         if store::first_flash_names(&device.first_flash).any(|n| n == asset.name) {
             continue;
@@ -139,7 +140,7 @@ pub async fn download(
             "first-flash files are admin only",
         ));
     }
-    let asset = store::find_asset(&state.db, device.project_id, &tag, &name)
+    let asset = store::find_asset(&state.db, &device.project_id, &tag, &name)
         .await?
         .ok_or(status(StatusCode::NOT_FOUND, "no such asset"))?;
     let bytes = asset.size;

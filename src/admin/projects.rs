@@ -10,7 +10,7 @@ use super::project_input::ProjectInput;
 use crate::{
     error::{AppError, Result, status},
     firmware::{cache, parse_version, store, sync, version},
-    state::{AppState, now},
+    state::{AppState, now, uuid},
 };
 
 fn conflict_or(e: sqlx::Error) -> AppError {
@@ -25,7 +25,7 @@ fn conflict_or(e: sqlx::Error) -> AppError {
 
 #[derive(sqlx::FromRow, Serialize)]
 pub struct ProjectRow {
-    id: i64,
+    id: String,
     slug: String,
     name: String,
     emoji: String,
@@ -74,11 +74,12 @@ pub async fn create(
     Json(input): Json<ProjectInput>,
 ) -> Result<Json<Value>> {
     let p = input.validate()?;
-    let (id,): (i64,) = sqlx::query_as(
-        "INSERT INTO projects (slug, name, emoji, repo, assets, first_flash, public, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         RETURNING id",
+    let id = uuid();
+    sqlx::query(
+        "INSERT INTO projects (id, slug, name, emoji, repo, assets, first_flash, public, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
+    .bind(&id)
     .bind(&p.slug)
     .bind(&p.name)
     .bind(&p.emoji)
@@ -87,16 +88,16 @@ pub async fn create(
     .bind(&p.first_flash)
     .bind(p.public)
     .bind(now())
-    .fetch_one(&state.db)
+    .execute(&state.db)
     .await
     .map_err(conflict_or)?;
-    sync::spawn(state, id);
+    sync::spawn(state, id.clone());
     Ok(Json(json!({ "id": id })))
 }
 
 pub async fn update(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id): Path<String>,
     Json(input): Json<ProjectInput>,
 ) -> Result<StatusCode> {
     let p = input.validate()?;
@@ -111,7 +112,7 @@ pub async fn update(
     .bind(&p.assets)
     .bind(&p.first_flash)
     .bind(p.public)
-    .bind(id)
+    .bind(&id)
     .execute(&state.db)
     .await
     .map_err(conflict_or)?;
@@ -122,7 +123,7 @@ pub async fn update(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn remove(State(state): State<AppState>, Path(id): Path<i64>) -> Result<StatusCode> {
+pub async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode> {
     sqlx::query("DELETE FROM projects WHERE id = ?")
         .bind(id)
         .execute(&state.db)
@@ -131,7 +132,7 @@ pub async fn remove(State(state): State<AppState>, Path(id): Path<i64>) -> Resul
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn sync(State(state): State<AppState>, Path(id): Path<i64>) -> StatusCode {
+pub async fn sync(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
     sync::spawn(state, id);
     StatusCode::ACCEPTED
 }
@@ -140,14 +141,14 @@ pub async fn sync(State(state): State<AppState>, Path(id): Path<i64>) -> StatusC
 /// as a board would from the device API but without counting as a device download.
 pub async fn download(
     State(state): State<AppState>,
-    Path((id, tag, name)): Path<(i64, String, String)>,
+    Path((id, tag, name)): Path<(String, String, String)>,
 ) -> Result<axum::response::Response> {
     let (repo,): (String,) = sqlx::query_as("SELECT repo FROM projects WHERE id = ?")
-        .bind(id)
+        .bind(&id)
         .fetch_optional(&state.db)
         .await?
         .ok_or(status(StatusCode::NOT_FOUND, "no such project"))?;
-    let asset = store::find_asset(&state.db, id, &tag, &name)
+    let asset = store::find_asset(&state.db, &id, &tag, &name)
         .await?
         .ok_or(status(StatusCode::NOT_FOUND, "no such asset"))?;
     cache::serve(&state, &repo, asset).await
@@ -155,11 +156,11 @@ pub async fn download(
 
 pub async fn releases(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id): Path<String>,
 ) -> Result<Json<Vec<Value>>> {
     let devices: Vec<(Option<String>, String)> =
         sqlx::query_as("SELECT last_version, id FROM devices WHERE project_id = ?")
-            .bind(id)
+            .bind(&id)
             .fetch_all(&state.db)
             .await?;
     // Compared as semver, so a device reporting `1.2.0` counts for the tag `v1.2.0`.
@@ -168,11 +169,11 @@ pub async fn releases(
         .filter_map(|(v, _)| v.as_deref().and_then(parse_version))
         .collect();
     // Only current devices: a revoked one would stay pending forever.
-    let mut updates = super::stats::updates(&state.db, id).await?;
+    let mut updates = super::stats::updates(&state.db, &id).await?;
     updates.retain(|device, _| devices.iter().any(|d| &d.1 == device));
-    let all_assets = store::project_assets(&state.db, id).await?;
+    let all_assets = store::project_assets(&state.db, &id).await?;
     let mut out = Vec::new();
-    for r in store::releases(&state.db, id).await? {
+    for r in store::releases(&state.db, &id).await? {
         let assets: Vec<_> = all_assets.iter().filter(|a| a.release_id == r.id).collect();
         let version = parse_version(&r.tag);
         let devices = installed

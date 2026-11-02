@@ -33,7 +33,7 @@ pub struct UpdateStatus {
 /// version when they check, so a device that never checks again stays `pending`.
 pub async fn updates(
     db: &SqlitePool,
-    project_id: i64,
+    project_id: &str,
 ) -> sqlx::Result<HashMap<String, UpdateStatus>> {
     let rows: Vec<(String, String, i64, Option<String>)> = sqlx::query_as(
         "SELECT d.device_id, d.tag, d.at,
@@ -66,14 +66,14 @@ pub async fn updates(
 type DeviceTotals = (Option<String>, Option<i64>, i64, i64, String);
 
 /// Fleet numbers and daily series for one project's page.
-pub async fn stats(State(state): State<AppState>, Path(id): Path<i64>) -> Result<Json<Value>> {
+pub async fn stats(State(state): State<AppState>, Path(id): Path<String>) -> Result<Json<Value>> {
     let devices: Vec<DeviceTotals> = sqlx::query_as(
         "SELECT last_version, last_seen, checks, downloads, id FROM devices WHERE project_id = ?",
     )
-    .bind(id)
+    .bind(&id)
     .fetch_all(&state.db)
     .await?;
-    let latest = store::latest_release(&state.db, id, false).await?;
+    let latest = store::latest_release(&state.db, &id, false).await?;
     let t = now();
     let today = t / 86400;
     let since = (today - DAYS + 1) * 86400;
@@ -89,7 +89,7 @@ pub async fn stats(State(state): State<AppState>, Path(id): Path<i64>) -> Result
             .entry(v.as_deref().unwrap_or("unknown"))
             .or_default() += 1;
     }
-    let updates = updates(&state.db, id).await?;
+    let updates = updates(&state.db, &id).await?;
     let in_state = |status: &str| {
         devices
             .iter()
@@ -107,17 +107,17 @@ pub async fn stats(State(state): State<AppState>, Path(id): Path<i64>) -> Result
         "latest": latest.map(|(_, r)| r.tag),
         "checks": devices.iter().map(|d| d.2).sum::<i64>(),
         "downloads": devices.iter().map(|d| d.3).sum::<i64>(),
-        "updates": updated(&state.db, id, since).await?,
+        "updates": updated(&state.db, &id, since).await?,
         "updates_pending": in_state("pending"),
         "updates_failed": in_state("failed"),
-        "channels": channels(&state.db, id, since).await?,
+        "channels": channels(&state.db, &id, since).await?,
         "versions": versions,
-        "days": days(&state.db, id, today).await?,
+        "days": days(&state.db, &id, today).await?,
     })))
 }
 
 /// The last `DAYS` UTC days, oldest first, as unix day numbers; the page turns them into dates.
-async fn days(db: &SqlitePool, id: i64, today: i64) -> sqlx::Result<Vec<Value>> {
+async fn days(db: &SqlitePool, id: &str, today: i64) -> sqlx::Result<Vec<Value>> {
     let rows: Vec<(i64, i64, i64, i64, i64)> = sqlx::query_as(
         "SELECT at / 86400 AS day, SUM(kind = 'check'), SUM(kind = 'download'),
            COALESCE(SUM(bytes), 0), COUNT(DISTINCT device_id)
@@ -137,7 +137,7 @@ async fn days(db: &SqlitePool, id: i64, today: i64) -> sqlx::Result<Vec<Value>> 
 }
 
 /// Devices per channel since `since`.
-async fn channels(db: &SqlitePool, id: i64, since: i64) -> sqlx::Result<BTreeMap<String, i64>> {
+async fn channels(db: &SqlitePool, id: &str, since: i64) -> sqlx::Result<BTreeMap<String, i64>> {
     let rows: Vec<(String, i64)> = sqlx::query_as(
         "SELECT channel, COUNT(DISTINCT device_id) FROM device_events
          WHERE project_id = ? AND kind = 'check' AND at >= ? GROUP BY channel",
@@ -150,7 +150,7 @@ async fn channels(db: &SqlitePool, id: i64, since: i64) -> sqlx::Result<BTreeMap
 }
 
 /// Updates since `since`: a device reporting a different version than on its previous check.
-async fn updated(db: &SqlitePool, id: i64, since: i64) -> sqlx::Result<i64> {
+async fn updated(db: &SqlitePool, id: &str, since: i64) -> sqlx::Result<i64> {
     let (updated,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM (
            SELECT at, version, LAG(version) OVER (PARTITION BY device_id ORDER BY at, id) AS prev

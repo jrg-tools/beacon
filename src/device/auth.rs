@@ -27,7 +27,7 @@ const MAX_SKEW_SECS: u64 = 300;
 #[derive(Clone, sqlx::FromRow)]
 pub struct Device {
     pub id: String,
-    pub project_id: i64,
+    pub project_id: String,
     pub slug: String,
     pub repo: String,
     pub first_flash: String,

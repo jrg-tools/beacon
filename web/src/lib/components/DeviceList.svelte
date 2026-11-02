@@ -11,7 +11,7 @@
 		projectId,
 		isPublic,
 		onchange
-	}: { projectId: number; isPublic: boolean; onchange: () => void } = $props();
+	}: { projectId: string; isPublic: boolean; onchange: () => void } = $props();
 
 	let devices = $state<Device[]>([]);
 	let error = $state('');

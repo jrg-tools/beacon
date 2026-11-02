@@ -34,17 +34,17 @@ pub struct DeviceRow {
 
 pub async fn list(
     State(state): State<AppState>,
-    Path(project_id): Path<i64>,
+    Path(project_id): Path<String>,
 ) -> Result<Json<Vec<DeviceRow>>> {
     let mut rows: Vec<DeviceRow> = sqlx::query_as(
         "SELECT id, name, created_at, last_seen, last_version, checks, downloads FROM devices
          WHERE project_id = ? ORDER BY name",
     )
-    .bind(project_id)
+    .bind(&project_id)
     .fetch_all(&state.db)
     .await?;
-    let latest = store::latest_release(&state.db, project_id, false).await?;
-    let mut updates = updates(&state.db, project_id).await?;
+    let latest = store::latest_release(&state.db, &project_id, false).await?;
+    let mut updates = updates(&state.db, &project_id).await?;
     let first = now() / 86400 - DAYS + 1;
     let counts: Vec<(String, i64, i64)> = sqlx::query_as(
         "SELECT device_id, at / 86400 AS day, COUNT(*) FROM device_events
@@ -78,7 +78,7 @@ pub struct DeviceInput {
 
 pub async fn create(
     State(state): State<AppState>,
-    Path(project_id): Path<i64>,
+    Path(project_id): Path<String>,
     Json(input): Json<DeviceInput>,
 ) -> Result<Json<Value>> {
     let name = valid_name(&input.name)?;

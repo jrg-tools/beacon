@@ -3,7 +3,7 @@
 	import { date, size } from '#lib/format.ts';
 	import List from './List.svelte';
 
-	let { projectId, repo }: { projectId: number; repo: string } = $props();
+	let { projectId, repo }: { projectId: string; repo: string } = $props();
 	// The 5 newest (the server sorts by date) and any older one a device runs or is updating to.
 	const releases = $derived(
 		api.releases(projectId).then((list) => list.filter((r, i) => i < 5 || r.devices || r.pending))

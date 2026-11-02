@@ -12,8 +12,8 @@
 	const slug = $derived(page.params.slug ?? '');
 
 	let project = $state<Project | null>(null);
-	// A number, so the lists below only reload when another project is opened.
-	const id = $derived(project?.id ?? 0);
+	// A string, so the lists below only reload when another project is opened.
+	const id = $derived(project?.id ?? '');
 	let stats = $state<Stats | null>(null);
 	let error = $state('');
 

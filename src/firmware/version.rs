@@ -34,8 +34,8 @@ mod tests {
 
     fn release(tag: &str, prerelease: bool) -> ReleaseRow {
         ReleaseRow {
-            id: 0,
-            project_id: 0,
+            id: String::new(),
+            project_id: String::new(),
             tag: tag.into(),
             prerelease,
             notes: String::new(),
