@@ -114,8 +114,7 @@
 		</span>
 	</label>
 
-	<label class="flex items-start gap-3">
-		<input type="checkbox" bind:checked={draft.public} class="mt-1 size-4 accent-yellow-400" />
+	<label class="flex cursor-pointer items-start justify-between gap-4">
 		<span class="space-y-0.5">
 			<span class="block text-sm font-semibold">Public</span>
 			<span class="block text-xs text-zinc-500">
@@ -123,6 +122,7 @@
 				from Beacon on their first update check: no sync. Private projects sign every request.
 			</span>
 		</span>
+		<input type="checkbox" role="switch" bind:checked={draft.public} class="switch" />
 	</label>
 
 	{#if saved}

@@ -42,11 +42,13 @@
 	let error = $state('');
 	// Bootloader, partition table…: a public project's are open, a private one's only its admin's.
 	const flashExtras = $derived(extras(admin?.project.first_flash ?? project?.first_flash ?? ''));
-	// Private projects only: a public one detects a board that needs it.
+	// A forced full flash; without it, a public project still detects a board that needs one.
 	let erase = $state(false);
 	// A first flash that keeps NVS (WiFi, Beacon key and id): a repair of the bootloader and table.
 	let keep = $state(false);
-	const canErase = $derived(!!admin && !project?.public && flashExtras.length > 0);
+	// An admin's may erase; a public project's visitor only repairs (keeps settings and id).
+	const canFull = $derived(flashExtras.length > 0 && (!!admin || !!project?.public));
+	const keeps = $derived(keep || !admin);
 
 	const STEPS = ['Inspect device', 'Verify device', 'Download', 'Flash', 'Restart', 'Check boot'];
 	const FIRST_STEPS = [
@@ -58,7 +60,7 @@
 		'Register'
 	];
 	let steps = $state(STEPS);
-	// Which step writes flash (its progress bar); -1 for none.
+	// Which step writes (or reads) flash: ConnectHint's progress bar; -1 for none.
 	let flashStep = $state(3);
 	// -1 before a run; steps.length once it is done.
 	let step = $state(-1);
@@ -70,15 +72,18 @@
 	let picking = $state(false);
 	// The release going on, once known: a private project's page learns it from the board.
 	let installing = $state('');
+	// A recovery tool's captions for ConnectHint; none for an install.
+	let captions = $state<[string, string][]>();
 	// ConnectHint following the run: the port popup, verifying, installing, done.
 	const live = $derived(
 		step < 0
 			? null
 			: {
-					scene: picking ? 1 : step >= steps.length ? 4 : step === 0 ? 2 : 3,
+					scene: picking ? 1 : step >= steps.length ? 4 : step === 0 && !captions ? 2 : 3,
 					progress,
 					failed: !!error && !running,
-					tag: installing
+					tag: installing,
+					captions
 				}
 	);
 
@@ -263,7 +268,13 @@
 	// A blank or bricked board: everything is written, bootloader and partition table included, the
 	// flash erased first unless `keepNvs` (a repair, keeping WiFi, key and id). Then it gets its id:
 	// issued by Beacon (public) or registered with a key (private), unless it kept one.
-	async function firstFlash(port: SerialPort, rel: NonNullable<typeof release>, keepNvs: boolean) {
+	// `known`: the id the board already has, if it said: a public one keeps it, no new one made.
+	async function firstFlash(
+		port: SerialPort,
+		rel: NonNullable<typeof release>,
+		keepNvs: boolean,
+		known = ''
+	) {
 		steps = FIRST_STEPS;
 		flashStep = 2;
 		await board?.close();
@@ -273,9 +284,14 @@
 		let id = '';
 		if (project?.public) {
 			// Its first check, made for it: the id carries the downloads and is written once it boots.
-			const res = await deviceGet(`/api/v1/firmware/${slug}/latest`, {});
+			// One Beacon refuses (unknown, or another project's) gets a new one.
+			const path = `/api/v1/firmware/${slug}/latest`;
+			const res = await deviceGet(path, known ? { device: known } : {}).catch((err) => {
+				if (known && (err.status === 401 || err.status === 403)) return deviceGet(path, {});
+				throw err;
+			});
 			id = (await res.json()).device;
-			log(`Beacon gave the device the id ${id}.`);
+			log(id === known ? `Keeping its id ${id}.` : `Beacon gave the device the id ${id}.`);
 		}
 		const downloaded = [];
 		for (const asset of rel.assets) {
@@ -310,7 +326,8 @@
 		log(`The device booted ${after.version}.`, 'ok');
 
 		step = 5;
-		if (keepNvs && after.id !== 'none') {
+		// A public board whose old id Beacon refused is given the new one.
+		if (keepNvs && after.id !== 'none' && !(known && known !== id)) {
 			id = after.id;
 			log(`It kept its id ${id}.`);
 		} else if (project?.public)
@@ -332,7 +349,13 @@
 
 	// Runs one USB job with its own steps and log: picks the port first, while the click still
 	// allows the port picker, and closes whatever is open however it ends.
-	async function run(list: string[], writes: number, work: (port: SerialPort) => Promise<void>) {
+	async function run(
+		list: string[],
+		writes: number,
+		work: (port: SerialPort) => Promise<void>,
+		lines?: [string, string][]
+	) {
+		captions = lines;
 		error = '';
 		logs = [];
 		done = '';
@@ -372,7 +395,16 @@
 			const seen = await probe(port, (line) => log(line));
 			describe(seen);
 			if (release) expectChip(seen, release);
-			if (canErase && erase) return firstFlash(port, release!, keep);
+			if (canFull && erase) {
+				let known = '';
+				if (project?.public && keeps) {
+					log('Asking its firmware who it is, to keep its id…');
+					board = await reconnect(port);
+					const { id } = await info(10000, '').catch(() => ({ id: 'none' }));
+					if (id !== 'none') known = id;
+				}
+				return firstFlash(port, release!, keeps, known);
+			}
 			if (!seen.table.length) {
 				if (!project?.public)
 					throw new Error(
@@ -415,14 +447,22 @@
 	// Recovery tools: the bootloader only, so they work whatever the board runs, or if it runs nothing.
 
 	function saveBackup() {
-		return run(['Read flash', 'Save'], 0, async (port) => {
-			const { image, chip } = await backup(port, (line) => log(line), flashing);
-			const name = `${slug}-${chip.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.bin`;
-			const url = URL.createObjectURL(new Blob([image]));
-			Object.assign(document.createElement('a'), { href: url, download: name }).click();
-			URL.revokeObjectURL(url);
-			done = `Saved ${name} (${size(image.length)}). It holds everything on the board, its WiFi password and Beacon key included: keep it private.`;
-		});
+		return run(
+			['Read flash', 'Save'],
+			0,
+			async (port) => {
+				const { image, chip } = await backup(port, (line) => log(line), flashing);
+				const name = `${slug}-${chip.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.bin`;
+				const url = URL.createObjectURL(new Blob([image]));
+				Object.assign(document.createElement('a'), { href: url, download: name }).click();
+				URL.revokeObjectURL(url);
+				done = `Saved ${name} (${size(image.length)}). It holds everything on the board, its WiFi password and Beacon key included: keep it private.`;
+			},
+			[
+				['Backing up', 'Reading the whole flash into a file. Keep it plugged in.'],
+				['Backed up', 'The file is saved: keep it private, it holds the board’s secrets.']
+			]
+		);
 	}
 
 	// The backup `restoreBackup` writes, picked first: a file picker's choice is not a click the port
@@ -433,23 +473,46 @@
 	function restoreBackup() {
 		const file = backupFile;
 		if (!file) return;
-		return run(['Write backup', 'Restart'], 0, async (port) => {
-			if (
-				!confirm(`Write ${file.name} over everything on this board? Its current contents are lost.`)
-			)
-				throw new Error('Cancelled: the board was not touched.');
-			await restore(port, new Uint8Array(await file.arrayBuffer()), (line) => log(line), flashing);
-			done = `The board was restored from ${file.name}.`;
-		});
+		return run(
+			['Write backup', 'Restart'],
+			0,
+			async (port) => {
+				if (
+					!confirm(
+						`Write ${file.name} over everything on this board? Its current contents are lost.`
+					)
+				)
+					throw new Error('Cancelled: the board was not touched.');
+				await restore(
+					port,
+					new Uint8Array(await file.arrayBuffer()),
+					(line) => log(line),
+					flashing
+				);
+				done = `The board was restored from ${file.name}.`;
+			},
+			[
+				['Restoring', 'Writing the backup over the whole flash. Keep it plugged in.'],
+				['Restored', 'The board runs what the backup held, settings included.']
+			]
+		);
 	}
 
 	function bootPreviousApp() {
-		return run(['Switch app', 'Restart'], -1, async (port) => {
-			const slot = await bootPrevious(port, (line) => log(line));
-			step = 1;
-			const what = slot.desc ? (tagOf(slot.desc.sha) ?? slot.desc.version) : 'its app';
-			done = `The board now boots ${slot.partition.label}: ${what}.`;
-		});
+		return run(
+			['Switch app', 'Restart'],
+			-1,
+			async (port) => {
+				const slot = await bootPrevious(port, (line) => log(line));
+				step = 1;
+				const what = slot.desc ? (tagOf(slot.desc.sha) ?? slot.desc.version) : 'its app';
+				done = `The board now boots ${slot.partition.label}: ${what}.`;
+			},
+			[
+				['Switching app', 'Pointing the bootloader at the other app slot.'],
+				['Switched', 'The board now boots the app the last install replaced.']
+			]
+		);
 	}
 
 	// A first flash's last step on a private project: Sync device's name, asked in the page.
@@ -516,8 +579,8 @@
 					r="2"
 				/><circle cx="9" cy="12" r="2" /><circle cx="17" cy="18" r="2" /></svg
 			>
-			<!-- First flash is on: the drawer holds a setting the install button uses. -->
-			{#if canErase && erase}
+			<!-- Full flash is on: the drawer holds a setting the install button uses. -->
+			{#if canFull && erase}
 				<span class="absolute top-1.5 right-1.5 size-2 rounded-full bg-yellow-400"></span>
 			{/if}
 		</button>
@@ -548,8 +611,8 @@
 				? 'Installing…'
 				: hidden
 					? 'Connect and update'
-					: canErase && erase
-						? `Connect, ${keep ? 'repair' : 'erase'} and flash ${tag}`
+					: canFull && erase
+						? `Connect, ${keeps ? 'repair' : 'erase'} and flash ${tag}`
 						: `Connect and install ${tag}`}</button
 		>
 		{#if !admin && signIn}
@@ -564,7 +627,7 @@
 	</section>
 
 	{#if step >= 0}
-		<FlashProgress {steps} {step} {flashStep} {progress} {running} {error} {logs} {done} />
+		<FlashProgress {steps} {step} {running} {error} {logs} {done} />
 	{/if}
 </div>
 
@@ -594,15 +657,16 @@
 				></button
 			>
 		</div>
-		{#if canErase}
+		{#if canFull}
 			<section class="space-y-1">
 				<h3 class="text-xs font-semibold text-zinc-500 uppercase">Installation</h3>
 				<label class="flex cursor-pointer items-start justify-between gap-4 py-3">
 					<span class="space-y-0.5">
-						<span class="block text-sm font-semibold">First flash</span>
+						<span class="block text-sm font-semibold">Full flash</span>
 						<span class="block text-xs text-zinc-500"
-							>Erases everything and writes the bootloader and partition table too, then registers
-							the board. For a blank or bricked one.</span
+							>Writes the bootloader and partition table too, not just the app. {admin
+								? 'Erases everything unless Keep settings is on, then registers the board.'
+								: 'Its settings and id stay.'} For a blank, bricked or broken board.</span
 						>
 					</span>
 					<input
@@ -613,7 +677,7 @@
 						class="switch"
 					/>
 				</label>
-				{#if erase}
+				{#if erase && admin}
 					<label class="flex cursor-pointer items-start justify-between gap-4 py-3 pl-4">
 						<span class="space-y-0.5">
 							<span class="block text-sm font-semibold">Keep settings</span>
@@ -647,7 +711,7 @@
 								>
 								<span class="block text-zinc-500"
 									>{size(asset.size)}{extra
-										? ` · first flash at 0x${extra.address.toString(16)}`
+										? ` · full flash at 0x${extra.address.toString(16)}`
 										: ''}</span
 								>
 							</span>
@@ -783,49 +847,6 @@
 		.drawer[open] {
 			animation: slide-in 0.2s ease-out;
 		}
-	}
-	.switch {
-		appearance: none;
-		flex-shrink: 0;
-		margin-top: 0.125rem;
-		width: 2.25rem;
-		height: 1.25rem;
-		border-radius: 9999px;
-		background: var(--color-zinc-300);
-		cursor: pointer;
-		transition: background 0.2s;
-		position: relative;
-	}
-	@media (prefers-color-scheme: dark) {
-		.switch {
-			background: var(--color-zinc-700);
-		}
-	}
-	.switch::after {
-		content: '';
-		position: absolute;
-		top: 0.125rem;
-		left: 0.125rem;
-		width: 1rem;
-		height: 1rem;
-		border-radius: 9999px;
-		background: white;
-		box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
-		transition: transform 0.2s;
-	}
-	.switch:checked {
-		background: var(--color-yellow-400);
-	}
-	.switch:checked::after {
-		transform: translateX(1rem);
-	}
-	.switch:focus-visible {
-		outline: 2px solid var(--color-yellow-400);
-		outline-offset: 2px;
-	}
-	.switch:disabled {
-		cursor: not-allowed;
-		opacity: 0.5;
 	}
 	@keyframes slide-in {
 		from {

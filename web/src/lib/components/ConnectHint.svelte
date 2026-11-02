@@ -14,7 +14,14 @@
 		live = null,
 		signed = true
 	}: {
-		live?: { scene: number; progress: number; failed: boolean; tag?: string } | null;
+		live?: {
+			scene: number;
+			progress: number;
+			failed: boolean;
+			tag?: string;
+			/** A recovery tool's own captions for scenes 3 (busy) and 4 (done), in place of an install's. */
+			captions?: [string, string][];
+		} | null;
 		signed?: boolean;
 	} = $props();
 
@@ -81,7 +88,9 @@
 		['Up to date', 'Your device runs the new release, its settings intact.']
 	]);
 	const caption = $derived(
-		failed ? ['That didn’t work', 'See the message below, then try again.'] : CAPTIONS[scene]
+		failed
+			? ['That didn’t work', 'See the message below, then try again.']
+			: (live?.captions?.[scene - 3] ?? CAPTIONS[scene])
 	);
 </script>
 
@@ -171,7 +180,13 @@
 				{:else if scene === 3 && !failed}
 					<div class="absolute inset-x-[12%] top-[52%] space-y-1" in:fade={{ duration: 250 }}>
 						<span class="flex justify-between text-[8px] font-semibold text-zinc-500">
-							<span>{live?.tag ? `Installing ${live.tag}` : 'Installing'}</span>
+							<span
+								>{live?.captions
+									? live.captions[0][0]
+									: live?.tag
+										? `Installing ${live.tag}`
+										: 'Installing'}</span
+							>
 							<span>{Math.round(fill * 100)}%</span>
 						</span>
 						<span class="block h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">

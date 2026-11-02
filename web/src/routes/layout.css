@@ -23,3 +23,48 @@ html {
 .action-danger {
 	@apply text-red-600 hover:bg-red-500/10 dark:hover:bg-red-500/10;
 }
+
+/* A toggle: an <input type="checkbox" role="switch" class="switch">. */
+.switch {
+	appearance: none;
+	flex-shrink: 0;
+	margin-top: 0.125rem;
+	width: 2.25rem;
+	height: 1.25rem;
+	border-radius: 9999px;
+	background: var(--color-zinc-300);
+	cursor: pointer;
+	transition: background 0.2s;
+	position: relative;
+}
+@media (prefers-color-scheme: dark) {
+	.switch {
+		background: var(--color-zinc-700);
+	}
+}
+.switch::after {
+	content: '';
+	position: absolute;
+	top: 0.125rem;
+	left: 0.125rem;
+	width: 1rem;
+	height: 1rem;
+	border-radius: 9999px;
+	background: white;
+	box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+	transition: transform 0.2s;
+}
+.switch:checked {
+	background: var(--color-yellow-400);
+}
+.switch:checked::after {
+	transform: translateX(1rem);
+}
+.switch:focus-visible {
+	outline: 2px solid var(--color-yellow-400);
+	outline-offset: 2px;
+}
+.switch:disabled {
+	cursor: not-allowed;
+	opacity: 0.5;
+}
