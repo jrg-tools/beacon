@@ -155,6 +155,8 @@ async fn upsert_release(
              ON CONFLICT (release_id, name) DO UPDATE SET
                sha256 = CASE WHEN github_id = excluded.github_id THEN sha256 END,
                md5 = CASE WHEN github_id = excluded.github_id THEN md5 END,
+               chip = CASE WHEN github_id = excluded.github_id THEN chip END,
+               app_sha = CASE WHEN github_id = excluded.github_id THEN app_sha END,
                github_id = excluded.github_id, size = excluded.size, digest = excluded.digest",
         )
         .bind(release_id)

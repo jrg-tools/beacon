@@ -1,15 +1,25 @@
 <script lang="ts">
 	import { beforeNavigate } from '$app/navigation';
 	import { page } from '$app/state';
-	import { onMount } from 'svelte';
+	import { getContext, onMount } from 'svelte';
 	import { ClerkProvider } from 'svelte-clerk/client';
 	import { ApiError, api, deviceGet, fetchConfig, projectReleases, register } from '#lib/api.ts';
 	import AdminSignIn from '#lib/components/AdminSignIn.svelte';
 	import ConnectHint from '#lib/components/ConnectHint.svelte';
 	import FlashProgress, { type Line } from '#lib/components/FlashProgress.svelte';
-	import { extras, firstFlashFiles, flash, partitions, place } from '#lib/flash.ts';
+	import {
+		type Board,
+		backup,
+		bootPrevious,
+		chipName,
+		extras,
+		firstFlashFiles,
+		flash,
+		probe,
+		restore
+	} from '#lib/flash.ts';
 	import { date, size } from '#lib/format.ts';
-	import { connect, hasSerial, reconnect } from '#lib/serial.ts';
+	import { type SerialPort, hasSerial, pick, reconnect } from '#lib/serial.ts';
 	import type { InstallProject, Project, Release } from '#lib/types.ts';
 
 	const slug = $derived(page.params.slug ?? '');
@@ -18,7 +28,7 @@
 	// A 404: a private project (or none) for anyone but its admin. The board's signed `latest` then
 	// says which release it gets, so nothing about the project shows before the board proves itself.
 	let hidden = $state(false);
-	// The admin sign-in, loaded only once asked for: its Clerk key.
+	// Clerk for an already signed-in admin, loaded only then: its key.
 	let signIn = $state<Promise<{ clerk_publishable_key: string }>>();
 	// Signed in as an admin: the project as the admin API has it, with every release file.
 	let admin = $state<{ project: Project; releases: Release[] } | null>(null);
@@ -34,11 +44,13 @@
 	const flashExtras = $derived(extras(admin?.project.first_flash ?? project?.first_flash ?? ''));
 	// Private projects only: a public one detects a board that needs it.
 	let erase = $state(false);
+	// A first flash that keeps NVS (WiFi, Beacon key and id): a repair of the bootloader and table.
+	let keep = $state(false);
 	const canErase = $derived(!!admin && !project?.public && flashExtras.length > 0);
 
-	const STEPS = ['Verify device', 'Download', 'Flash', 'Restart', 'Check boot'];
+	const STEPS = ['Inspect device', 'Verify device', 'Download', 'Flash', 'Restart', 'Check boot'];
 	const FIRST_STEPS = [
-		'Connect',
+		'Inspect device',
 		'Download',
 		'Erase and flash',
 		'Restart',
@@ -46,6 +58,8 @@
 		'Register'
 	];
 	let steps = $state(STEPS);
+	// Which step writes flash (its progress bar); -1 for none.
+	let flashStep = $state(3);
 	// -1 before a run; steps.length once it is done.
 	let step = $state(-1);
 	let progress = $state(0);
@@ -83,13 +97,19 @@
 
 	onMount(() => {
 		load();
-		// Coming from the admin pages, Clerk is already loaded and signed in.
-		if (window.Clerk?.session) signIn = fetchConfig();
+		// Coming from the admin pages, Clerk is already loaded and signed in; on a reload, its
+		// `__client_uat` cookie (0 when signed out) says someone is, so a visitor never loads Clerk.
+		if (window.Clerk?.session || /(?:^|; )__client_uat[^=]*=[1-9]/.test(document.cookie))
+			signIn = fetchConfig();
 	});
+
+	// The layout's header, which links to the admin pages for an admin.
+	const shell = getContext<{ admin: boolean }>('install');
 
 	// Signed in as this project's admin: the full page, the private project's included.
 	async function onadmin(found: NonNullable<typeof admin>) {
 		admin = found;
+		shell.admin = true;
 		if (!project) await load(); // now with the admin's session
 	}
 
@@ -98,9 +118,9 @@
 			logs.push({ at: new Date().toLocaleTimeString(), text: line, kind });
 	}
 
-	type Board = Awaited<ReturnType<typeof connect>>;
-	// The open session, closed when a run ends however it ends.
-	let board: Board | undefined;
+	type Firmware = Awaited<ReturnType<typeof reconnect>>;
+	// The open session with the board's firmware, closed when a run ends however it ends.
+	let board: Firmware | undefined;
 
 	const NOT_REGISTERED = 'This device is not registered: sync it on the project page first.';
 
@@ -142,15 +162,59 @@
 
 	const flashing = (fraction: number) => {
 		progress = fraction;
-		if (fraction >= 1) step = 3;
+		if (fraction >= 1) step = flashStep + 1;
 	};
 
-	type Target = { tag: string; assets: { name: string; size: number }[] };
+	type Target = {
+		tag: string;
+		assets: { name: string; size: number; chip?: number | null }[];
+	};
+
+	// The release whose app has this ELF hash (`app_sha`, read by the server from each cached
+	// release), so the page names what a board runs without asking its firmware.
+	const tagOf = (sha: string) =>
+		(admin?.releases ?? project?.releases ?? []).find((r) =>
+			r.assets.some((a) => a.app_sha === sha)
+		)?.tag;
+
+	// What the bootloader found, in the log: chip, table and what each app slot holds.
+	function describe(seen: Board) {
+		log(
+			`${seen.chip}, ${seen.table.length ? `${seen.table.length} partitions` : 'no partition table (blank)'}.`
+		);
+		for (const p of seen.table)
+			log(`Partition ${p.label} at 0x${p.offset.toString(16)} (${size(p.size)})`);
+		for (const { partition, chip, desc } of seen.apps) {
+			const what =
+				chip === undefined
+					? 'empty'
+					: desc
+						? (tagOf(desc.sha) ?? `${desc.project} ${desc.version}, built ${desc.built}`)
+						: 'an app';
+			log(`${partition.label}: ${what}${partition === seen.running ? ' (boots)' : ''}`);
+		}
+	}
+
+	// Before anything is downloaded: the chip the release's images are built for (the server reads
+	// it from each cached file; unknown for one not cached yet, which the flash checks instead).
+	function expectChip(seen: Board, rel: Target) {
+		const want = rel.assets.find((a) => a.chip != null)?.chip;
+		if (want != null && seen.chipId !== undefined && want !== seen.chipId)
+			throw new Error(
+				`Connected device is an ${seen.chip}, but ${project?.name ?? 'this firmware'} ${rel.tag} is built for the ${chipName(want)}. Wrong device? Nothing was downloaded or written.`
+			);
+	}
 
 	// Verified before anything is written, and again once the new firmware has booted. NVS stays.
 	// Without `rel` (a private project's page for a non-admin), the release is whatever the board's
 	// own `latest` offers it.
-	async function update(rel: Target | undefined, before: { id: string; version: string }) {
+	async function update(
+		port: SerialPort,
+		rel: Target | undefined,
+		before: { id: string; version: string },
+		seen: Board
+	) {
+		step = 1;
 		if (before.id === 'none') throw new Error(NOT_REGISTERED);
 		const latest = await (await check(before.id, before.version)).json();
 		log(`Your device is verified (${before.id}), on ${before.version}.`, 'ok');
@@ -161,15 +225,12 @@
 			}
 			rel = latest.latest as Target;
 			log(`Its newest release is ${rel.tag}.`);
+			expectChip(seen, rel);
 		}
 		installing = rel.tag;
-		const table = partitions(await board!.ask('beacon partitions', 'beacon:partitions ', 5000));
-		if (!table.length) throw new Error('The device reported no partitions.');
-		for (const p of table)
-			log(`Partition ${p.label} at 0x${p.offset.toString(16)} (${size(p.size)})`);
 
 		// While the board is still connected: it signs each download.
-		step = 1;
+		step = 2;
 		const assets = [];
 		for (const asset of rel.assets) {
 			if (flashExtras.some((e) => e.name === asset.name)) continue;
@@ -177,21 +238,18 @@
 			const res = await boardGet(before.id, assetPath(rel.tag, asset.name));
 			assets.push({ name: asset.name, data: new Uint8Array(await res.arrayBuffer()) });
 		}
-		const port = board!.port;
 		await board!.close();
 		board = undefined;
 
-		step = 2;
-		const { files, skipped } = place(table, assets);
-		for (const name of skipped) log(`Skipping ${name}: not an app or filesystem image.`);
-		log(`Entering the bootloader to install ${rel.tag}…`);
-		await flash(port, files, (line) => log(line), flashing);
-		step = 4;
+		step = 3;
+		log(`Checking the images, then entering the bootloader to install ${rel.tag}…`);
+		await flash(port, { assets }, (line) => log(line), flashing);
+		step = 5;
 		log('Waiting for the device to boot…');
 		board = await reconnect(port);
 		const after = await info(
 			30000,
-			'The device came back on USB but did not answer: the new firmware may not boot. Install it again or check its serial log.'
+			'The device came back on USB but did not answer: the new firmware may not boot. Boot the previous app from Recovery tools, or check its serial log.'
 		);
 		if (after.id !== before.id)
 			throw new Error(`A different device answered after the restart (${after.id}).`);
@@ -202,12 +260,13 @@
 		done = `Your device is on ${rel.tag}.`;
 	}
 
-	// A blank or bricked board: the flash is erased and everything written, bootloader and partition
-	// table included. Then it gets its id: issued by Beacon (public) or registered with a key (private).
-	async function firstFlash(rel: NonNullable<typeof release>) {
+	// A blank or bricked board: everything is written, bootloader and partition table included, the
+	// flash erased first unless `keepNvs` (a repair, keeping WiFi, key and id). Then it gets its id:
+	// issued by Beacon (public) or registered with a key (private), unless it kept one.
+	async function firstFlash(port: SerialPort, rel: NonNullable<typeof release>, keepNvs: boolean) {
 		steps = FIRST_STEPS;
-		const port = board!.port;
-		await board!.close();
+		flashStep = 2;
+		await board?.close();
 		board = undefined;
 
 		step = 1;
@@ -235,19 +294,26 @@
 		for (const name of skipped) log(`Skipping ${name}: not an app or filesystem image.`);
 
 		step = 2;
-		log(`Erasing the board and writing ${rel.tag}…`);
-		await flash(port, files, (line) => log(line), flashing, true);
+		log(
+			keepNvs
+				? `Rewriting the bootloader, table and ${rel.tag}, settings kept…`
+				: `Erasing the board and writing ${rel.tag}…`
+		);
+		await flash(port, { files }, (line) => log(line), flashing, !keepNvs);
 		step = 4;
 		log('Waiting for the device to boot…');
 		board = await reconnect(port);
-		const { version } = await info(
+		const after = await info(
 			30000,
 			'The device came back on USB but did not answer: the firmware may not boot. Check its serial log.'
 		);
-		log(`The device booted ${version}.`, 'ok');
+		log(`The device booted ${after.version}.`, 'ok');
 
 		step = 5;
-		if (project?.public)
+		if (keepNvs && after.id !== 'none') {
+			id = after.id;
+			log(`It kept its id ${id}.`);
+		} else if (project?.public)
 			await board.ask(`beacon id ${id}`, `beacon:ok ${id}`).catch(() => {
 				throw new Error(`The device did not save its id ${id}: flash it again.`);
 			});
@@ -255,53 +321,32 @@
 			const name = await askName();
 			if (!name)
 				throw new Error(
-					`The device runs ${version} but is not registered: sync it on the project page.`
+					`The device runs ${after.version} but is not registered: sync it on the project page.`
 				);
 			id = await register(board, admin!.project.id, name);
 		}
-		await check(id, version);
+		await check(id, after.version);
 		log(`Your device is ${id}.`, 'ok');
-		done = `Your device runs ${version} as ${id}${project?.public ? '' : ', its key made on the board'}.`;
+		done = `Your device runs ${after.version} as ${id}${project?.public || keepNvs ? '' : ', its key made on the board'}.`;
 	}
 
-	async function install() {
-		if (!hidden && (!project || !release)) return;
+	// Runs one USB job with its own steps and log: picks the port first, while the click still
+	// allows the port picker, and closes whatever is open however it ends.
+	async function run(list: string[], writes: number, work: (port: SerialPort) => Promise<void>) {
 		error = '';
 		logs = [];
 		done = '';
 		progress = 0;
-		steps = STEPS;
+		steps = list;
+		flashStep = writes;
 		running = true;
 		installing = '';
 		step = 0;
 		try {
-			// First, while the click still allows the port picker.
 			picking = true;
-			board = await connect();
+			const port = await pick();
 			picking = false;
-			if (canErase && erase) await firstFlash(release!);
-			else {
-				log('Port open, asking the device who it is…');
-				// A public project's board that doesn't answer runs no (or foreign) firmware.
-				const before = await info(
-					project?.public ? 10000 : 15000,
-					'The device did not answer "beacon info": its firmware predates installs from here, so update it over the air or with PlatformIO once.'
-				).catch((err) => {
-					if (project?.public) return { id: 'none', version: '' };
-					throw err;
-				});
-				if (project?.public && before.id === 'none') {
-					log(
-						before.version
-							? 'The device has no id yet: first flash.'
-							: 'No answer to "beacon info" (a blank board or other firmware): first flash.'
-					);
-					// Anyone's board may be plugged in: never wipe it without asking.
-					if ((await ask(eraseDialog!)) !== 'erase')
-						throw new Error('Cancelled: the board was not touched.');
-					await firstFlash(release!);
-				} else await update(release, before);
-			}
+			await work(port);
 			step = steps.length;
 		} catch (err) {
 			// Closing the port picker is not an error.
@@ -318,11 +363,101 @@
 		}
 	}
 
+	// The bootloader first, whatever the board runs: its chip, table and installed app decide the
+	// rest. Its firmware is asked only who the board is (and, on a private project, to sign).
+	function install() {
+		if (!hidden && (!project || !release)) return;
+		return run(STEPS, 3, async (port) => {
+			log('Entering the bootloader to see what the board holds…');
+			const seen = await probe(port, (line) => log(line));
+			describe(seen);
+			if (release) expectChip(seen, release);
+			if (canErase && erase) return firstFlash(port, release!, keep);
+			if (!seen.table.length) {
+				if (!project?.public)
+					throw new Error(
+						'The board is blank (no partition table): it needs a first flash, which its admin does after Admin sign-in.'
+					);
+				return confirmFirstFlash(port, seen, 'The board is blank: first flash.');
+			}
+			log('Asking its firmware who it is…');
+			board = await reconnect(port);
+			// A public project's board that doesn't answer runs no (or foreign) firmware.
+			const before = await info(
+				project?.public ? 10000 : 15000,
+				'The device did not answer "beacon info": its firmware predates installs from here, so update it over the air or with PlatformIO once.'
+			).catch((err) => {
+				if (project?.public) return { id: 'none', version: '' };
+				throw err;
+			});
+			if (project?.public && before.id === 'none')
+				return confirmFirstFlash(
+					port,
+					seen,
+					before.version
+						? 'The device has no id yet: first flash.'
+						: 'No answer to "beacon info" (other firmware): first flash.'
+				);
+			return update(port, release, before, seen);
+		});
+	}
+
+	// Anyone's board may be plugged in: never wipe it without asking. One with a partition table can
+	// be repaired instead, keeping its settings.
+	async function confirmFirstFlash(port: SerialPort, seen: Board, why: string) {
+		log(why);
+		keepable = seen.table.length > 0;
+		const answer = await ask(eraseDialog!);
+		if (!answer) throw new Error('Cancelled: the board was not touched.');
+		await firstFlash(port, release!, answer === 'keep');
+	}
+
+	// Recovery tools: the bootloader only, so they work whatever the board runs, or if it runs nothing.
+
+	function saveBackup() {
+		return run(['Read flash', 'Save'], 0, async (port) => {
+			const { image, chip } = await backup(port, (line) => log(line), flashing);
+			const name = `${slug}-${chip.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.bin`;
+			const url = URL.createObjectURL(new Blob([image]));
+			Object.assign(document.createElement('a'), { href: url, download: name }).click();
+			URL.revokeObjectURL(url);
+			done = `Saved ${name} (${size(image.length)}). It holds everything on the board, its WiFi password and Beacon key included: keep it private.`;
+		});
+	}
+
+	// The backup `restoreBackup` writes, picked first: a file picker's choice is not a click the port
+	// picker accepts.
+	let backupFile = $state<File | null>(null);
+
+	function restoreBackup() {
+		const file = backupFile;
+		if (!file) return;
+		return run(['Write backup', 'Restart'], 0, async (port) => {
+			if (
+				!confirm(`Write ${file.name} over everything on this board? Its current contents are lost.`)
+			)
+				throw new Error('Cancelled: the board was not touched.');
+			await restore(port, new Uint8Array(await file.arrayBuffer()), (line) => log(line), flashing);
+			done = `The board was restored from ${file.name}.`;
+		});
+	}
+
+	function bootPreviousApp() {
+		return run(['Switch app', 'Restart'], -1, async (port) => {
+			const slot = await bootPrevious(port, (line) => log(line));
+			step = 1;
+			const what = slot.desc ? (tagOf(slot.desc.sha) ?? slot.desc.version) : 'its app';
+			done = `The board now boots ${slot.partition.label}: ${what}.`;
+		});
+	}
+
 	// A first flash's last step on a private project: Sync device's name, asked in the page.
 	let dialog = $state<HTMLDialogElement>();
 	let deviceName = $state('');
 	// A public project's first flash erases the board: confirmed first.
 	let eraseDialog = $state<HTMLDialogElement>();
+	// The board has a partition table, so the dialog also offers a repair that keeps its settings.
+	let keepable = $state(false);
 
 	// Opens `d`; its form's submit button value once it closes ('' if dismissed).
 	function ask(d: HTMLDialogElement) {
@@ -349,45 +484,6 @@
 <svelte:window onbeforeunload={(e) => running && e.preventDefault()} />
 
 <div class="mx-auto max-w-3xl space-y-8 px-4 pb-20 sm:px-6">
-	<div class="space-y-3">
-		<header class="flex items-center gap-4">
-			<span
-				class="grid size-14 shrink-0 place-items-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400"
-				aria-hidden="true"
-			>
-				<svg
-					viewBox="0 0 24 24"
-					class="size-7"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="1.5"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-				>
-					<rect x="6" y="6" width="12" height="12" rx="2" />
-					<rect x="9.5" y="9.5" width="5" height="5" rx="0.5" />
-					<path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" />
-				</svg>
-			</span>
-			<div class="min-w-0">
-				<h1 class="truncate text-xl font-semibold">
-					{hidden ? 'Update your device' : `Install ${project?.name ?? 'firmware'}`}
-				</h1>
-				<p class="text-sm text-zinc-500 dark:text-zinc-400">
-					{#if hidden}
-						Connect it with a USB cable to install the latest release. Your settings are kept.
-					{:else if project?.public}
-						Connect your board with a USB cable to install the latest firmware. Blank boards work
-						too.
-					{:else}
-						Connect your registered device with a USB cable to install the latest release. Your
-						settings are kept.
-					{/if}
-				</p>
-			</div>
-		</header>
-	</div>
-
 	{#if !hasSerial()}
 		<p class="rounded-lg border border-yellow-500/40 bg-yellow-400/10 px-4 py-3 text-sm">
 			Installing talks to the device over USB, which needs Chrome or Edge on a computer.
@@ -396,9 +492,8 @@
 	{#if error && step < 0}
 		<p class="text-sm font-semibold text-red-600" role="alert">{error}</p>
 	{/if}
-	{#if hidden && !admin}
-		<ConnectHint {live} />
-	{/if}
+	<!-- The board signs for a private project, an admin's update included; a public one's just answers. -->
+	<ConnectHint {live} signed={project?.public !== true} />
 
 	<section class="space-y-4">
 		{#if !hidden}
@@ -450,6 +545,22 @@
 					</span>
 				</span>
 			</label>
+			{#if erase}
+				<label class="ml-7 flex items-start gap-3">
+					<input
+						type="checkbox"
+						bind:checked={keep}
+						disabled={running}
+						class="mt-1 size-4 accent-yellow-400"
+					/>
+					<span class="space-y-0.5">
+						<span class="block text-sm font-semibold">Keep settings (repair)</span>
+						<span class="block text-xs text-zinc-500">
+							Rewrites the bootloader, table and app without erasing NVS: WiFi, key and id stay.
+						</span>
+					</span>
+				</label>
+			{/if}
 		{/if}
 		<button
 			onclick={install}
@@ -460,32 +571,65 @@
 				: hidden
 					? 'Connect and update'
 					: canErase && erase
-						? `Connect, erase and flash ${tag}`
+						? `Connect, ${keep ? 'repair' : 'erase'} and flash ${tag}`
 						: `Connect and install ${tag}`}</button
 		>
-		{#if (hidden || project?.public === false) && !admin}
-			{#if signIn}
-				{#await signIn then { clerk_publishable_key }}
-					<ClerkProvider publishableKey={clerk_publishable_key}>
-						<AdminSignIn {slug} {onadmin} />
-					</ClerkProvider>
-				{:catch err}
-					<p class="text-sm font-semibold text-red-600" role="alert">{err.message}</p>
-				{/await}
-			{:else}
-				<button
-					onclick={() => (signIn = fetchConfig())}
-					disabled={running}
-					class="cursor-pointer text-xs font-semibold text-zinc-500 underline-offset-2 hover:underline disabled:cursor-not-allowed"
-					>Admin sign-in (versions and first flash)</button
-				>
-			{/if}
+		{#if !admin && signIn}
+			{#await signIn then { clerk_publishable_key }}
+				<ClerkProvider publishableKey={clerk_publishable_key}>
+					<AdminSignIn {slug} {onadmin} />
+				</ClerkProvider>
+			{:catch}
+				<!-- Admin mode only: a visitor's page stays as it is. -->
+			{/await}
 		{/if}
 	</section>
 
 	{#if step >= 0}
-		<FlashProgress {steps} {step} flashStep={2} {progress} {running} {error} {logs} {done} />
+		<FlashProgress {steps} {step} {flashStep} {progress} {running} {error} {logs} {done} />
 	{/if}
+
+	<details class="space-y-4 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+		<summary class="cursor-pointer text-sm font-semibold">Recovery tools</summary>
+		<p class="text-xs text-zinc-500">
+			These talk to the board's bootloader, so they work whatever it runs, or if it runs nothing.
+		</p>
+		<div class="grid gap-3 sm:grid-cols-2">
+			<button
+				onclick={saveBackup}
+				disabled={running || !hasSerial()}
+				class="cursor-pointer rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-semibold transition hover:bg-zinc-200/60 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:hover:bg-zinc-800/60"
+				title="Reads the whole flash into a file: minutes for 16 MB">Back up the whole flash</button
+			>
+			<button
+				onclick={bootPreviousApp}
+				disabled={running || !hasSerial()}
+				class="cursor-pointer rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-semibold transition hover:bg-zinc-200/60 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:hover:bg-zinc-800/60"
+				title="Boots the app the last install replaced, still in the other slot"
+				>Boot the previous app</button
+			>
+		</div>
+		<div class="flex flex-wrap items-center gap-3">
+			<input
+				type="file"
+				accept=".bin,application/octet-stream"
+				disabled={running}
+				onchange={(e) => (backupFile = e.currentTarget.files?.[0] ?? null)}
+				class="min-w-0 flex-1 text-xs text-zinc-500 file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-zinc-200 file:px-3 file:py-2 file:text-xs file:font-semibold dark:file:bg-zinc-800"
+				aria-label="Backup file to restore"
+			/>
+			<button
+				onclick={restoreBackup}
+				disabled={running || !backupFile || !hasSerial()}
+				class="cursor-pointer rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-semibold transition hover:bg-zinc-200/60 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:hover:bg-zinc-800/60"
+				>Restore backup</button
+			>
+		</div>
+		<p class="text-xs text-zinc-500">
+			A backup holds everything on the board, its WiFi password and Beacon key included. A restore
+			writes it back whole, once its size, bootloader and partition table check out for this board.
+		</p>
+	</details>
 </div>
 
 <dialog
@@ -529,6 +673,11 @@
 				It did not answer as a {project?.name ?? ''} device with an id, so installing means a first flash:
 				everything on it is erased, its WiFi and other settings included, then {tag} is written.
 			</p>
+			{#if keepable}
+				<p class="text-xs text-zinc-500">
+					Or repair it: the bootloader, partition table and {tag} are rewritten, settings kept.
+				</p>
+			{/if}
 		</div>
 		<div class="flex justify-end gap-3">
 			<button
@@ -536,6 +685,13 @@
 				class="cursor-pointer rounded-lg px-5 py-2.5 text-sm font-semibold text-zinc-500 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
 				>Cancel</button
 			>
+			{#if keepable}
+				<button
+					value="keep"
+					class="cursor-pointer rounded-lg px-5 py-2.5 text-sm font-semibold hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
+					>Repair</button
+				>
+			{/if}
 			<button
 				value="erase"
 				class="cursor-pointer rounded-lg bg-yellow-400 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-yellow-300"

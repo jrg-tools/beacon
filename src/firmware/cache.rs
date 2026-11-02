@@ -8,7 +8,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use tokio::fs;
+use tokio::{fs, io::AsyncReadExt};
 use tokio_util::io::ReaderStream;
 
 use super::{AssetRow, parse_version, store, version::pick_latest};
@@ -28,7 +28,13 @@ async fn is_cached(state: &AppState, asset: &AssetRow) -> anyhow::Result<bool> {
 /// Downloads the asset from GitHub unless it is already cached; returns it with its hashes.
 pub async fn ensure(state: &AppState, repo: &str, asset: AssetRow) -> anyhow::Result<AssetRow> {
     if is_cached(state, &asset).await? {
-        return Ok(asset);
+        // Cached before chips were read. shortcut: a non-image (filesystem) is re-read on every
+        // call, 256 bytes and one UPDATE; store a "not an image" marker if downloads get heavy.
+        return if asset.chip.is_none() {
+            read_image(state, asset).await
+        } else {
+            Ok(asset)
+        };
     }
     // shortcut: one download at a time across all assets; fine for a handful of projects.
     let _guard = state.fetch_lock.lock().await;
@@ -54,6 +60,19 @@ pub async fn ensure(state: &AppState, repo: &str, asset: AssetRow) -> anyhow::Re
     store::set_hashes(&state.db, asset.id, &sha256, &md5).await?;
     asset.sha256 = Some(sha256);
     asset.md5 = Some(md5);
+    read_image(state, asset).await
+}
+
+/// Stores the chip and app hash from the cached file's header (`store::image`).
+async fn read_image(state: &AppState, mut asset: AssetRow) -> anyhow::Result<AssetRow> {
+    let mut head = Vec::new();
+    fs::File::open(path(state, asset.github_id))
+        .await?
+        .take(256)
+        .read_to_end(&mut head)
+        .await?;
+    (asset.chip, asset.app_sha) = store::image(&head);
+    store::set_image(&state.db, asset.id, asset.chip, asset.app_sha.as_deref()).await?;
     Ok(asset)
 }
 

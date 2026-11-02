@@ -1,14 +1,18 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import { setContext } from 'svelte';
 	import { ClerkProvider, Show, SignIn, UserButton } from 'svelte-clerk/client';
 	import { fetchConfig } from '#lib/api.ts';
 	import './layout.css';
 
 	let { children } = $props();
 	// The install page needs no sign-in: the board's signature is its credential (src/install.rs).
-	// Clerk doesn't load there unless an admin asks to sign in (AdminSignIn.svelte).
+	// Clerk doesn't load there unless an admin is already signed in (AdminSignIn.svelte).
 	const signInFree = $derived(page.route.id?.startsWith('/firmware/') ?? false);
+	// Set by the install page once its signed-in session proves to be an admin's: the header's link.
+	const install = $state({ admin: false });
+	setContext('install', install);
 	const year = new Date().getFullYear();
 	// As in jrg-life: the header follows scrollY (scroll-driven CSS doesn't run in Safari or Firefox).
 	let scrollY = $state(0);
@@ -29,7 +33,9 @@
 				<img src="/logo.webp" class="w-8 shrink-0 sm:w-9" alt="" />
 				<span class="truncate text-lg font-bold sm:text-xl">Beacon</span>
 			</a>
-			{#if signedIn}<UserButton />{/if}
+			{#if signedIn}<UserButton />{:else if install.admin}<a href={resolve('/admin')} class="action"
+					>Admin</a
+				>{/if}
 		</div>
 	</header>
 {/snippet}

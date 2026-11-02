@@ -1,8 +1,9 @@
 <!--
-	The install page of a private project (or an unknown slug: the 404 is the same) for anyone but its
-	admin. The registered board is the key, so this walks through using it: plug it in, pick it in the
-	browser's popup, it proves itself, it updates. Idle, it plays the walkthrough on its own (a step
-	click jumps to it); during a run, `live` drives it from the real steps.
+	The install page's walkthrough: plug the board in, pick it in the browser's popup, it answers, it
+	updates. `signed` (a private project, or an unknown slug: the 404 is the same) is where the
+	registered board is the key: it proves itself with its own key and the lock opens. Idle, it plays
+	the walkthrough on its own (a step click jumps to it); during a run, `live` drives it from the
+	real steps.
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
@@ -10,17 +11,26 @@
 
 	/** 0 plug in (the demo only), 1 port popup, 2 proving, 3 updating, 4 done. */
 	let {
-		live = null
-	}: { live?: { scene: number; progress: number; failed: boolean; tag?: string } | null } =
-		$props();
+		live = null,
+		signed = true
+	}: {
+		live?: { scene: number; progress: number; failed: boolean; tag?: string } | null;
+		signed?: boolean;
+	} = $props();
 
-	const STEPS = [
+	const STEPS = $derived([
 		['Plug it in', 'Your device, over USB, on this computer.'],
 		['Pick it', 'Choose it in the browser’s popup.'],
-		['It proves itself', 'It signs with its own key, which never leaves it.'],
-		['It updates', 'To its newest release, and only it gets it.']
-	];
+		signed
+			? ['It proves itself', 'It signs with its own key, which never leaves it.']
+			: ['It checks in', 'It says which device it is and what it runs.'],
+		signed
+			? ['It updates', 'To its newest release, and only it gets it.']
+			: ['It installs', 'The release, written over USB. Blank boards work too.']
+	]);
 	const SCENE_MS = 3000;
+	// Ends at the vertical centre (15 of 30), where the device's USB plug is.
+	const CABLE = 'M0 15 Q50 32 100 15';
 
 	let demo = $state(0);
 	// A step clicked by hand holds the demo there for a while.
@@ -59,13 +69,17 @@
 	// The step each scene belongs to; done counts as past the last.
 	const stepOf = (s: number) => Math.min(s, 3) + (s === 4 ? 1 : 0);
 
-	const CAPTIONS = [
-		['This firmware is private', 'It opens with a registered device, not a password.'],
+	const CAPTIONS = $derived([
+		signed
+			? ['This firmware is private', 'It opens with a registered device, not a password.']
+			: ['Install from your browser', 'Plug your device in with a USB cable to begin.'],
 		['Pick your device', 'The browser asks which USB port to use: choose your device.'],
-		['Your device is proving itself', 'It signs the request with its own key.'],
-		['Installing', 'Downloading and writing its newest release. Keep it plugged in.'],
-		['Up to date', 'Your device runs its newest release, settings and key intact.']
-	];
+		signed
+			? ['Your device is proving itself', 'It signs the request with its own key.']
+			: ['Checking your device', 'It says which device it is and which version it runs.'],
+		['Installing', 'Downloading and writing the release. Keep it plugged in.'],
+		['Up to date', 'Your device runs the new release, its settings intact.']
+	]);
 	const caption = $derived(
 		failed ? ['That didn’t work', 'See the message below, then try again.'] : CAPTIONS[scene]
 	);
@@ -151,7 +165,7 @@
 							<span
 								class="spin size-2.5 rounded-full border-2 border-yellow-400 border-t-transparent"
 							></span>
-							Verifying…
+							{signed ? 'Verifying…' : 'Checking…'}
 						</span>
 					</div>
 				{:else if scene === 3 && !failed}
@@ -197,93 +211,189 @@
 			<div class="mx-[-6%] h-1.5 rounded-b-md bg-zinc-300 dark:bg-zinc-700"></div>
 		</div>
 
-		<!-- The cable: drawn as it is plugged in, then requests out and signed answers back. -->
-		<div class="relative mb-[9%] flex-1">
-			<svg viewBox="0 0 100 30" preserveAspectRatio="none" class="h-8 w-full overflow-visible">
-				<path
-					d="M0 14 Q50 32 100 14"
-					pathLength="100"
-					fill="none"
-					stroke-width="2"
-					vector-effect="non-scaling-stroke"
-					class="cable stroke-zinc-400 dark:stroke-zinc-500"
-					class:plugging={scene === 0}
-				/>
-				{#if scene === 2 || scene === 3}
+		<!-- The cable and the device share one row, centred on the cable end and the USB port, so the
+			plug always meets the cable whatever the width. -->
+		<div class="mb-[12%] flex flex-1 items-center">
+			<!-- The cable: drawn as it is plugged in, then requests out and signed answers back. -->
+			<div class="relative flex-1">
+				<svg
+					viewBox="0 0 100 30"
+					preserveAspectRatio="none"
+					class="block h-8 w-full overflow-visible"
+				>
 					<path
-						d="M0 14 Q50 32 100 14"
+						d={CABLE}
 						pathLength="100"
+						fill="none"
+						stroke-width="2"
 						vector-effect="non-scaling-stroke"
-						class="packet out stroke-zinc-500 dark:stroke-zinc-300"
-						class:fast={scene === 3}
+						class="cable stroke-zinc-400 dark:stroke-zinc-500"
+						class:plugging={scene === 0}
 					/>
-					{#if scene === 2}
+					{#if scene === 2 || scene === 3}
 						<path
-							d="M0 14 Q50 32 100 14"
+							d={CABLE}
 							pathLength="100"
 							vector-effect="non-scaling-stroke"
-							class="packet back stroke-yellow-400"
+							class="packet out stroke-zinc-500 dark:stroke-zinc-300"
+							class:fast={scene === 3}
+						/>
+						{#if scene === 2}
+							<path
+								d={CABLE}
+								pathLength="100"
+								vector-effect="non-scaling-stroke"
+								class="packet back stroke-yellow-400"
+							/>
+						{/if}
+					{/if}
+				</svg>
+				<!-- The lock, open once the board has proved itself. -->
+				<!-- overflow-visible: the open shackle rises past the viewBox top. -->
+				{#if signed}<svg
+						viewBox="-12 -14 24 32"
+						class="absolute -top-9 left-1/2 w-6 -translate-x-1/2 overflow-visible"
+					>
+						<path
+							d="M-7 0v-6a7 7 0 0 1 14 0v6"
+							fill="none"
+							stroke-width="2.5"
+							stroke-linecap="round"
+							class="shackle stroke-zinc-400 transition-transform duration-500 dark:stroke-zinc-500"
+							class:open={scene >= 3 && !failed}
+							class:unlocking={scene === 2}
+						/>
+						<rect
+							x="-11"
+							width="22"
+							height="17"
+							rx="4"
+							class="transition-colors duration-500 {failed
+								? 'fill-red-500'
+								: scene >= 3
+									? 'fill-yellow-400'
+									: 'fill-zinc-300 dark:fill-zinc-700'}"
+						/>
+						<circle cy="8" r="2.5" class="fill-white dark:fill-zinc-900" />
+					</svg>{/if}
+			</div>
+
+			<!-- The device: a small dev-board gadget with a landscape colour screen, two buttons on top,
+				a status LED and a USB-C plug on its left edge, at the vertical centre (y 17 of 34). -->
+			<!-- xMinYMid: the plug stays on the box's left edge, against the cable end. -->
+			<svg
+				viewBox="0 0 64 34"
+				preserveAspectRatio="xMinYMid meet"
+				class="block aspect-[64/34] h-auto w-[58%] shrink-0 overflow-visible"
+			>
+				<rect x="0" y="14" width="8" height="6" rx="1.5" class="fill-zinc-400 dark:fill-zinc-500" />
+				<rect
+					x="3"
+					y="15.5"
+					width="4"
+					height="3"
+					rx="0.8"
+					class="fill-zinc-500 dark:fill-zinc-600"
+				/>
+				{#each [40, 50] as x (x)}
+					<rect {x} y="0.5" width="7" height="3" rx="1" class="fill-zinc-400 dark:fill-zinc-600" />
+				{/each}
+				<rect
+					x="6"
+					y="2"
+					width="57"
+					height="30"
+					rx="5"
+					class="fill-zinc-800 stroke-zinc-900 dark:fill-zinc-950 dark:stroke-zinc-700"
+					stroke-width="1"
+				/>
+				<!-- A sheen along the top of the case. -->
+				<rect x="9" y="3.5" width="51" height="1.2" rx="0.6" class="fill-white/10" />
+				<!-- The screen, its bezel, and what it shows in each scene. -->
+				<rect
+					x="10.5"
+					y="6.5"
+					width="40"
+					height="21"
+					rx="2"
+					class="fill-zinc-950 stroke-zinc-700"
+					stroke-width="0.6"
+				/>
+				<g class="screen" class:on={scene > 0 || failed}>
+					<rect x="12" y="8" width="37" height="18" rx="1" class="fill-zinc-900" />
+					{#if failed}
+						<path
+							d="M27 13l6 6m0-6l-6 6"
+							stroke-width="1.8"
+							stroke-linecap="round"
+							class="stroke-red-500"
+						/>
+					{:else if scene === 1}
+						<!-- Idle: a status bar and a couple of readings. -->
+						<rect x="14" y="10" width="8" height="1.5" rx="0.75" class="fill-yellow-400" />
+						<circle cx="46" cy="10.75" r="0.9" class="fill-emerald-400" />
+						<rect x="14" y="15" width="20" height="3" rx="1" class="fill-zinc-600" />
+						<rect x="14" y="20" width="13" height="2" rx="1" class="fill-zinc-700" />
+					{:else if scene === 2 && !signed}
+						<!-- Answering: an id and a version going out. -->
+						<g class="sign">
+							<rect x="18" y="13" width="18" height="2" rx="1" class="fill-yellow-400" />
+							<rect x="18" y="18" width="11" height="2" rx="1" class="fill-zinc-600" />
+						</g>
+					{:else if scene === 2}
+						<!-- Signing: a key. -->
+						<g class="sign stroke-yellow-400" fill="none" stroke-width="1.4" stroke-linecap="round">
+							<circle cx="25.5" cy="17" r="3" />
+							<path d="M28.5 17h7m-2 0v2.5m-2.5-2.5v2" />
+						</g>
+					{:else if scene === 3}
+						<rect x="16" y="16" width="29" height="2.5" rx="1.25" class="fill-zinc-700" />
+						<rect
+							x="16"
+							y="16"
+							width="29"
+							height="2.5"
+							rx="1.25"
+							class="bar fill-yellow-400 {live ? 'duration-500' : 'duration-[2400ms]'}"
+							style="transform: scaleX({fill})"
+						/>
+						<rect x="16" y="11" width="10" height="1.5" rx="0.75" class="fill-zinc-600" />
+					{:else if scene === 4}
+						<path
+							d="M25 17.5l3 3 6-7"
+							fill="none"
+							stroke-width="1.8"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							class="draw stroke-emerald-400"
 						/>
 					{/if}
-				{/if}
-			</svg>
-			<!-- The lock, open once the board has proved itself. -->
-			<!-- overflow-visible: the open shackle rises past the viewBox top. -->
-			<svg
-				viewBox="-12 -14 24 32"
-				class="absolute -top-9 left-1/2 w-6 -translate-x-1/2 overflow-visible"
-			>
-				<path
-					d="M-7 0v-6a7 7 0 0 1 14 0v6"
-					fill="none"
-					stroke-width="2.5"
-					stroke-linecap="round"
-					class="shackle stroke-zinc-400 transition-transform duration-500 dark:stroke-zinc-500"
-					class:open={scene >= 3 && !failed}
-					class:unlocking={scene === 2}
-				/>
-				<rect
-					x="-11"
-					width="22"
-					height="17"
-					rx="4"
-					class="transition-colors duration-500 {failed
+				</g>
+				<circle
+					cx="57"
+					cy="11"
+					r="1.6"
+					class="led transition-colors duration-300 {failed
 						? 'fill-red-500'
-						: scene >= 3
-							? 'fill-yellow-400'
-							: 'fill-zinc-300 dark:fill-zinc-700'}"
-				/>
-				<circle cy="8" r="2.5" class="fill-white dark:fill-zinc-900" />
-			</svg>
-		</div>
-
-		<!-- The device: a small body with an inset screen, a button and its status LED.
-			mb-[6%] keeps the USB port level with the cable end. -->
-		<div
-			class="relative mb-[6%] flex aspect-[4/3] w-[20%] shrink-0 flex-col gap-[8%] rounded-md border-2 border-zinc-300 bg-zinc-100 p-[8%] dark:border-zinc-700 dark:bg-zinc-800"
-		>
-			<span
-				class="absolute top-1/2 -left-[11%] h-[24%] w-[9%] -translate-y-1/2 rounded-l-sm bg-zinc-400 dark:bg-zinc-500"
-			></span>
-			<span
-				class="flex flex-1 flex-col justify-center gap-[12%] rounded-sm bg-zinc-900 px-[10%] ring-1 ring-zinc-300 dark:bg-zinc-950 dark:ring-zinc-700"
-			>
-				<span class="block h-[10%] w-1/2 rounded-full bg-zinc-600"></span>
-				<span class="block h-[10%] w-1/3 rounded-full bg-zinc-700"></span>
-			</span>
-			<span class="flex items-center justify-between">
-				<span class="h-1 w-1/4 rounded-full bg-zinc-300 dark:bg-zinc-600"></span>
-				<span
-					class="led size-1.5 rounded-full transition-colors duration-300 {failed
-						? 'bg-red-500'
 						: scene === 4
-							? 'bg-emerald-400'
-							: 'bg-yellow-400'}"
+							? 'fill-emerald-400'
+							: 'fill-yellow-400'}"
 					class:off={scene === 0}
 					class:blink={scene === 2}
 					class:busy={scene === 3}
-				></span>
-			</span>
+				/>
+				<!-- Speaker grille. -->
+				{#each [19, 22, 25] as y (y)}
+					<rect
+						x="54.5"
+						{y}
+						width="5"
+						height="1"
+						rx="0.5"
+						class="fill-zinc-700 dark:fill-zinc-800"
+					/>
+				{/each}
+			</svg>
 		</div>
 	</div>
 
@@ -529,6 +639,23 @@
 			bottom: 4%;
 			opacity: 1;
 		}
+	}
+
+	.screen {
+		opacity: 0.15;
+		transition: opacity 0.4s;
+	}
+	.screen.on {
+		opacity: 1;
+	}
+	.bar {
+		transform-box: fill-box;
+		transform-origin: left;
+		transition-property: transform;
+		transition-timing-function: ease-out;
+	}
+	.motion .sign {
+		animation: blink 1.6s ease-in-out infinite;
 	}
 
 	.motion .spin {

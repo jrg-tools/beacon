@@ -23,13 +23,17 @@ const serial = () =>
 
 export const hasSerial = () => typeof navigator !== 'undefined' && 'serial' in navigator;
 
-/** Asks the browser for a port; rejects with a `NotFoundError` DOMException if none is picked. */
-export async function connect() {
+/** Asks the browser for a port, unopened; rejects with a `NotFoundError` DOMException if none is picked. */
+export function pick() {
 	// Only ESP32 boards: Espressif's native USB, plus the USB-UART chips dev boards use (CP210x, CH34x, FTDI).
-	const port = await serial().requestPort({
+	return serial().requestPort({
 		filters: [0x303a, 0x10c4, 0x1a86, 0x0403].map((usbVendorId) => ({ usbVendorId }))
 	});
-	return open(port);
+}
+
+/** `pick`, then opens the port to talk to the firmware. */
+export async function connect() {
+	return open(await pick());
 }
 
 /**

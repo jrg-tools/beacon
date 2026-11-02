@@ -58,7 +58,9 @@ async fn project(
             .iter()
             .filter(|a| a.release_id == r.id)
             .filter(|a| !store::first_flash_names(&hidden).any(|n| n == a.name))
-            .map(|a| json!({ "name": a.name, "size": a.size }))
+            .map(
+                |a| json!({ "name": a.name, "size": a.size, "chip": a.chip, "app_sha": a.app_sha }),
+            )
             .collect();
         releases.push(json!({ "tag": r.tag, "prerelease": r.prerelease, "published_at": r.published_at, "assets": assets }));
     }
@@ -102,7 +104,7 @@ mod tests {
         assert_eq!(project["first_flash"], "");
         assert_eq!(
             project["releases"][0]["assets"],
-            serde_json::json!([{ "name": "firmware.bin", "size": 5 }])
+            serde_json::json!([{ "name": "firmware.bin", "size": 5, "chip": null, "app_sha": null }])
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

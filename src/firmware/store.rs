@@ -31,13 +31,17 @@ pub struct AssetRow {
     /// GitHub's SHA-256 of the file, known before it is cached (not for older uploads).
     #[serde(skip)]
     pub digest: Option<String>,
+    /// From the file's header once cached (`image`): the chip it is built for and, for an app,
+    /// its ELF SHA-256, which the install page matches against what a board runs.
+    pub chip: Option<i64>,
+    pub app_sha: Option<String>,
 }
 
 /// An asset query: every `AssetRow` column, then `$rest` (sqlx wants a literal).
 macro_rules! assets {
     ($rest:literal) => {
         concat!(
-            "SELECT a.id, a.release_id, a.name, a.github_id, a.size, a.sha256, a.md5, a.digest FROM assets a ",
+            "SELECT a.id, a.release_id, a.name, a.github_id, a.size, a.sha256, a.md5, a.digest, a.chip, a.app_sha FROM assets a ",
             $rest
         )
     };
@@ -135,4 +139,54 @@ pub async fn set_hashes(db: &SqlitePool, id: i64, sha256: &str, md5: &str) -> sq
         .execute(db)
         .await?;
     Ok(())
+}
+
+pub async fn set_image(
+    db: &SqlitePool,
+    id: i64,
+    chip: Option<i64>,
+    app_sha: Option<&str>,
+) -> sqlx::Result<()> {
+    sqlx::query("UPDATE assets SET chip = ?, app_sha = ? WHERE id = ?")
+        .bind(chip)
+        .bind(app_sha)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// An ESP image's chip (bytes 12-13 of its header) and, for an app built with an
+/// `esp_app_desc_t`, its ELF SHA-256 (at 0xb0, where esptool's `--elf-sha256-offset` puts it).
+/// Both `None` for anything else, a filesystem image or a partition table.
+pub fn image(head: &[u8]) -> (Option<i64>, Option<String>) {
+    if head.len() < 24 || head[0] != 0xe9 {
+        return (None, None);
+    }
+    let chip = i64::from(u16::from_le_bytes([head[12], head[13]]));
+    let app_sha = head
+        .get(0xb0..0xd0)
+        .filter(|_| head[32..36] == 0xabcd5432u32.to_le_bytes())
+        .filter(|sha| sha.iter().any(|&b| b != 0))
+        .map(hex::encode);
+    (Some(chip), app_sha)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn image_reads_chip_and_app_hash() {
+        let mut app = vec![0u8; 256];
+        app[0] = 0xe9;
+        app[12] = 9; // ESP32-S3
+        app[32..36].copy_from_slice(&0xabcd5432u32.to_le_bytes());
+        app[0xb0] = 0xab;
+        let (chip, sha) = super::image(&app);
+        assert_eq!(chip, Some(9));
+        assert_eq!(sha.unwrap(), format!("ab{}", "00".repeat(31)));
+        // A bootloader: a chip, no app description.
+        app[32] = 0;
+        assert_eq!(super::image(&app), (Some(9), None));
+        assert_eq!(super::image(b"littlefs"), (None, None));
+    }
 }

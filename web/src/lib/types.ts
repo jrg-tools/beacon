@@ -28,6 +28,10 @@ export interface Asset {
 	size: number;
 	sha256: string | null;
 	md5: string | null;
+	/** From the file's header once cached: the chip an app or bootloader image is built for. */
+	chip: number | null;
+	/** An app's ELF SHA-256, which names the release a board runs (`appDesc` on the install page). */
+	app_sha: string | null;
 }
 
 export interface Release {
@@ -99,6 +103,6 @@ export interface InstallProject {
 	first_flash: string;
 	latest: string | null;
 	releases: (Pick<Release, 'tag' | 'prerelease' | 'published_at'> & {
-		assets: Pick<Asset, 'name' | 'size'>[];
+		assets: Pick<Asset, 'name' | 'size' | 'chip' | 'app_sha'>[];
 	})[];
 }

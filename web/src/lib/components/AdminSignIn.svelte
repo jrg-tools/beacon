@@ -1,7 +1,8 @@
 <script lang="ts">
-	// The install page's admin sign-in, mounted inside a ClerkProvider only once asked for, so an
-	// anonymous visitor never loads Clerk's scripts on the page that drives the board.
-	import { Show, SignIn, useClerkContext } from 'svelte-clerk/client';
+	// The install page's admin mode, mounted inside a ClerkProvider only for an already signed-in
+	// session, so a visitor never loads Clerk's scripts on the page that drives the board. It shows
+	// nothing: no sign-in form, and a signed-in non-admin just gets the visitor's page.
+	import { useClerkContext } from 'svelte-clerk/client';
 	import { api } from '#lib/api.ts';
 	import type { Project, Release } from '#lib/types.ts';
 
@@ -12,7 +13,6 @@
 		$props();
 
 	const clerk = useClerkContext();
-	let error = $state('');
 	let asked = false;
 
 	$effect(() => {
@@ -22,11 +22,6 @@
 			const found = await api.project(slug);
 			if (!found) throw new Error();
 			onadmin({ project: found, releases: await api.releases(found.id) });
-		})().catch(() => (error = 'This account is not an admin of this project.'));
+		})().catch(() => {});
 	});
 </script>
-
-<Show when="signed-out"><SignIn routing="hash" /></Show>
-{#if error}
-	<p class="text-sm font-semibold text-red-600" role="alert">{error}</p>
-{/if}

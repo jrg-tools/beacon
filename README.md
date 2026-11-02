@@ -59,8 +59,8 @@ It needs no sign-in and loads no Clerk script.
 - **Private project**: `GET /api/v1/install/{slug}` is a `404`, the same as for an unknown slug, unless
   the caller is an admin (Clerk session in `Authorization: Bearer`), so nobody else learns its name or
   releases. The page shows one **Connect and update** button: the board signs a `latest` check and
-  gets the newest release for it, whose tag shows only then. **Admin sign-in** on the page loads Clerk;
-  an admin then gets the version picker and the first flash.
+  gets the newest release for it, whose tag shows only then. Already signed in at `/admin`, the page
+  loads Clerk and an admin gets the version picker and the first flash; there is no sign-in on it.
 
 Everything else goes through the device API below, signed by the board over USB for a private project,
 so only a registered device of it gets its firmware:
@@ -68,17 +68,31 @@ so only a registered device of it gets its firmware:
 ```
 > beacon info                          < beacon:info <dev_...|none> <version>
 > beacon sign <ts> GET <path?query>    < beacon:sig <ts> GET <path?query> <signature hex|none>
-> beacon partitions                    < beacon:partitions <type,subtype,offset hex,size hex,label;...>
 ```
+
+The page no longer asks `beacon partitions`: firmware can drop it. Everything about the flash comes
+from the board's ROM bootloader, whatever it runs (see below).
 
 A public project's board signs nothing (no `beacon sign`): the page sends its id alone.
 `beacon sign` signs the same message the board signs for its own requests (only `GET`s of
 `/api/v1/firmware/`), and the page sends it with the usual headers: `latest?current=<version>` checks
 the board is registered here (and records its version), then each asset is downloaded as a device
-download. The page flashes them with esptool-js, using the partition table the app reported
-(esptool-js's `readFlash` stalls on the ESP32-S3's USB port): the app to factory/ota_0, the filesystem
-image to the SPIFFS/LittleFS partition, and otadata is blanked so the new app boots. NVS (WiFi, the
-Beacon key and id) is kept. The board is reset out of the bootloader even when an install fails.
+download.
+
+Before any of that, the page puts the board in its ROM bootloader (esptool-js) and reads, from flash:
+the chip, the partition table at `0x8000` (its MD5 checked), otadata and the header of each app slot.
+The header's `esp_app_desc_t` ELF SHA-256 is matched against each release's `app_sha` (the server reads
+it, and the image's `chip`, from every cached file), so the log names the release in each slot without
+asking the firmware. A release built for another chip stops there, before anything is downloaded; a
+board with no table is blank and goes to the first flash. Downloaded images are checked as the
+bootloader will (header, segments, checksum, appended SHA-256; tables by their MD5) before the board is
+touched again. Then the page flashes them in the bootloader with the board's own table: the app to the
+OTA slot it is not running (as its WiFi updates do, so the running app stays and **Boot the previous
+app** can go back to it), the filesystem image to the SPIFFS/LittleFS partition, and an otadata entry
+selecting the new slot (read back to check). A table without two OTA slots gets the app on factory/ota_0
+and blank otadata. Every write is checked against the chip's MD5 of what landed. The page reads flash
+with small acked packets, not esptool-js's `readFlash`, which stalled on the ESP32-S3's USB port.
+NVS (WiFi, the Beacon key and id) is kept. The board is reset out of the bootloader even when an install fails.
 Afterwards the page reopens the port, checks the same device answers on the new version and makes a
 signed `latest` check, so the update shows as succeeded. The computer's clock must be within 5 minutes
 of the server's, like the board's. Boards on firmware older than `beacon sign` need one update over
@@ -93,16 +107,30 @@ They are mirrored like the assets but never sent as an update (not in `latest`).
 partition table from whichever first-flash file is one, places the app and filesystem with it as an
 install does, erases the whole flash, writes everything and waits for `beacon info`. Then:
 
-- **Private project**: only an admin, after **Admin sign-in**, sees the
+- **Private project**: only an admin, already signed in, sees the
   first-flash files and a **First flash (erase everything)** checkbox; unchecked, it is a normal
-  update. The files come through `GET /admin/api/projects/{id}/releases/{tag}/{asset}` (admin only,
+  update. **Keep settings (repair)** under it skips the erase. The files come through `GET /admin/api/projects/{id}/releases/{tag}/{asset}` (admin only,
   not a device download; a device download of one is `401`). Once the board boots, the page asks for a
   name and registers it as **Sync device** does.
-- **Public project**: no checkbox. A board that doesn't answer `beacon info` (blank or other firmware)
-  or answers with no id gets a first flash, once the visitor confirms the erase (it wipes the board's
-  settings): the page asks `latest` without an id for a new one,
+- **Public project**: no checkbox. A blank board (no partition table), or one that doesn't answer
+  `beacon info` (other firmware) or answers with no id, gets a first flash once the visitor confirms
+  the erase (it wipes the board's settings), or chooses **Repair** on a board with a table: the same
+  writes without erasing NVS, and a board that kept its id keeps it. The page asks `latest` without an
+  id for a new one,
   downloads every file as that device, flashes, and sends the id with `beacon id`. A board with an id
   gets a normal update.
+
+### Recovery tools
+
+Bootloader only, so they work whatever the board runs:
+
+- **Back up the whole flash** reads it (size detected from the flash chip) in 64 KB chunks, each
+  checked against the stub's MD5, into `<slug>-<chip>-<date>.bin`. It holds NVS: WiFi password and the
+  Beacon private key.
+- **Restore backup** writes such a file back whole, once its size matches the board's flash, it starts
+  with a valid bootloader for this chip and holds an intact table at `0x8000`.
+- **Boot the previous app** points otadata at the other OTA slot, once its header shows an app for
+  this chip.
 
 ## Device API
 
