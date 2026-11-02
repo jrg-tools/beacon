@@ -18,6 +18,9 @@ pub struct ProjectInput {
     /// Files only the first flash writes, at fixed offsets: "bootloader.bin@0x0, partitions.bin@0x8000".
     #[serde(default)]
     pub first_flash: String,
+    /// Devices send only their id, unsigned, and anyone may install or first-flash.
+    #[serde(default)]
+    pub public: bool,
 }
 
 /// Letters, digits and `extra`; never only dots, so nothing reads as a path segment.
@@ -112,6 +115,7 @@ mod tests {
             repo: repo.into(),
             assets: assets.into(),
             first_flash: String::new(),
+            public: false,
         }
     }
 

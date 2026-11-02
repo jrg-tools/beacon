@@ -1,7 +1,7 @@
-//! The public install page's version picker (`/firmware/{slug}` in the UI), without the project's
-//! first-flash files. Everything else the page does goes through the device API, signed by the board
-//! over USB (`beacon sign` in the firmware), so only a registered device of the project ever gets its
-//! firmware.
+//! The public install page's version picker (`/firmware/{slug}` in the UI), without a private
+//! project's first-flash files. Everything else the page does goes through the device API, signed by
+//! the board over USB (`beacon sign` in the firmware) for a private project, so only a registered
+//! device of it ever gets its firmware.
 
 use axum::{
     Json, Router,
@@ -23,12 +23,18 @@ pub fn router() -> Router<AppState> {
 
 /// The project and its releases (tags and asset sizes, no files).
 async fn project(State(state): State<AppState>, Path(slug): Path<String>) -> Result<Json<Value>> {
-    let (name, emoji, id, first_flash): (String, String, i64, String) =
-        sqlx::query_as("SELECT name, emoji, id, first_flash FROM projects WHERE slug = ?")
+    let (name, emoji, id, mut first_flash, public): (String, String, i64, String, bool) =
+        sqlx::query_as("SELECT name, emoji, id, first_flash, public FROM projects WHERE slug = ?")
             .bind(&slug)
             .fetch_optional(&state.db)
             .await?
             .ok_or(status(StatusCode::NOT_FOUND, "no such project"))?;
+    // A public project's first flash is open to anyone; a private one's is the admin's (admin API).
+    let hidden = if public {
+        String::new()
+    } else {
+        std::mem::take(&mut first_flash)
+    };
     let latest = store::latest_release(&state.db, id, false)
         .await?
         .map(|(_, r)| r.tag);
@@ -37,13 +43,13 @@ async fn project(State(state): State<AppState>, Path(slug): Path<String>) -> Res
         let assets: Vec<Value> = store::release_assets(&state.db, r.id)
             .await?
             .into_iter()
-            .filter(|a| !store::first_flash_names(&first_flash).any(|n| n == a.name))
+            .filter(|a| !store::first_flash_names(&hidden).any(|n| n == a.name))
             .map(|a| json!({ "name": a.name, "size": a.size }))
             .collect();
         releases.push(json!({ "tag": r.tag, "prerelease": r.prerelease, "published_at": r.published_at, "assets": assets }));
     }
     Ok(Json(
-        json!({ "slug": slug, "name": name, "emoji": emoji, "latest": latest, "releases": releases }),
+        json!({ "slug": slug, "name": name, "emoji": emoji, "public": public, "first_flash": first_flash, "latest": latest, "releases": releases }),
     ))
 }
 

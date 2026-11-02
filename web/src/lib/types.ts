@@ -7,8 +7,10 @@ export interface Project {
 	emoji: string;
 	repo: string;
 	assets: string;
-	/** Files only the admin's first flash writes: "bootloader.bin@0x0,partitions.bin@0x8000". */
+	/** Files only the first flash writes: "bootloader.bin@0x0,partitions.bin@0x8000". */
 	first_flash: string;
+	/** Devices send only their id, unsigned, and anyone may install or first-flash. */
+	public: boolean;
 	synced_at: number | null;
 	sync_error: string | null;
 	releases: number;
@@ -18,7 +20,7 @@ export interface Project {
 
 export type ProjectInput = Pick<
 	Project,
-	'slug' | 'name' | 'emoji' | 'repo' | 'assets' | 'first_flash'
+	'slug' | 'name' | 'emoji' | 'repo' | 'assets' | 'first_flash' | 'public'
 >;
 
 export interface Asset {
@@ -92,6 +94,9 @@ export interface InstallProject {
 	slug: string;
 	name: string;
 	emoji: string;
+	public: boolean;
+	/** Empty for a private project: its first flash is the admin's (`api.download`). */
+	first_flash: string;
 	latest: string | null;
 	releases: (Pick<Release, 'tag' | 'prerelease' | 'published_at'> & {
 		assets: Pick<Asset, 'name' | 'size'>[];

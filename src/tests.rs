@@ -157,9 +157,95 @@ async fn device_api_rejects_bad_signatures() {
     *req.uri_mut() = format!("{latest}?channel=beta").parse().unwrap();
     assert_eq!(call(&state, req).await.0, StatusCode::UNAUTHORIZED);
     assert_eq!(call(&state, get(latest)).await.0, StatusCode::UNAUTHORIZED);
+    // A private project's device id alone is not enough.
+    let mut req = get(latest);
+    req.headers_mut()
+        .insert("x-beacon-device", "dev_1".parse().unwrap());
+    assert_eq!(call(&state, req).await.0, StatusCode::UNAUTHORIZED);
+    // Each signed request works once.
+    let ts = now();
+    assert_eq!(
+        call(&state, signed(latest, KEY, ts)).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&state, signed(latest, KEY, ts)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
     // A device key only opens its own project.
     let other = signed("/api/v1/firmware/cam/latest", KEY, now());
     assert_eq!(call(&state, other).await.0, StatusCode::FORBIDDEN);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn with_id(path: &str, id: &str) -> Request<Body> {
+    let mut req = get(path);
+    req.headers_mut()
+        .insert("x-beacon-device", id.parse().unwrap());
+    req
+}
+
+#[tokio::test]
+async fn public_project_needs_only_an_id() {
+    let (state, dir) = setup().await;
+    sqlx::query("UPDATE projects SET public = 1 WHERE id = 1")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let latest = "/api/v1/firmware/ab98/latest?current=v1.1.0";
+    let (code, _, body) = call(&state, with_id(latest, "dev_1")).await;
+    assert_eq!(code, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["device"], "dev_1");
+    // First-flash files are as open as the rest.
+    for name in ["firmware.bin", "bootloader.bin"] {
+        let path = format!("/api/v1/firmware/ab98/releases/v1.2.0/{name}");
+        assert_eq!(
+            call(&state, with_id(&path, "dev_1")).await.0,
+            StatusCode::OK
+        );
+    }
+    // Still traced: an unknown id or none on a download is refused.
+    assert_eq!(
+        call(&state, with_id(latest, "dev_nope")).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let download = "/api/v1/firmware/ab98/releases/v1.2.0/firmware.bin";
+    assert_eq!(
+        call(&state, get(download)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    // A board without an id gets one from its first check, and uses it from then on.
+    let (code, _, body) = call(&state, get(latest)).await;
+    assert_eq!(code, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let id = json["device"].as_str().unwrap();
+    assert_ne!(id, "dev_1");
+    let (name, version): (String, Option<String>) =
+        sqlx::query_as("SELECT name, last_version FROM devices WHERE id = ?")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (name.as_str(), version.as_deref()),
+        ("unnamed", Some("v1.1.0"))
+    );
+    assert_eq!(call(&state, with_id(download, id)).await.0, StatusCode::OK);
+    // A private project issues none.
+    assert_eq!(
+        call(&state, get("/api/v1/firmware/cam/latest")).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    // The install page sees the first-flash files and where they go.
+    let (_, _, body) = call(&state, get("/api/v1/install/ab98")).await;
+    let project: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(project["public"], true);
+    assert_eq!(project["first_flash"], "bootloader.bin@0x0");
+    assert_eq!(
+        project["releases"][0]["assets"][0]["name"],
+        "bootloader.bin"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }
 

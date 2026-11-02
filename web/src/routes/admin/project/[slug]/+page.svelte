@@ -79,9 +79,6 @@
 				<nav class="-ml-3 flex w-full gap-1 sm:ml-0 sm:w-auto">
 					<a href="{resolve('/admin')}?project={project.id}" class="action">Edit</a>
 					<a href={resolve('/firmware/[slug]', { slug: project.slug })} class="action">Install</a>
-					<a href={resolve('/admin/project/[slug]/flash', { slug: project.slug })} class="action"
-						>First flash</a
-					>
 				</nav>
 			</header>
 		{/if}
@@ -96,7 +93,7 @@
 		{/if}
 
 		<div class="grid grid-cols-1 gap-10 lg:grid-cols-2">
-			<section><DeviceList projectId={id} onchange={load} /></section>
+			<section><DeviceList projectId={id} isPublic={project.public} onchange={load} /></section>
 			<!-- Reloads only when a sync finishes. -->
 			{#key project.synced_at}
 				<section><ReleaseList projectId={id} repo={project.repo} /></section>

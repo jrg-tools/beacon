@@ -40,7 +40,10 @@ pub fn router(state: AppState, ui_dir: &Path) -> Router<AppState> {
             "/projects/{id}/devices",
             get(devices::list).post(devices::create),
         )
-        .route("/devices/{id}", delete(devices::remove))
+        .route(
+            "/devices/{id}",
+            delete(devices::remove).patch(devices::rename),
+        )
         .route_layer(middleware::from_fn_with_state(state, auth::require_admin))
         // Public: the page needs the key before anyone can sign in.
         .route("/config", get(config))
@@ -126,9 +129,12 @@ mod tests {
     #[tokio::test]
     async fn update_status_follows_the_next_check() {
         let (state, dir) = setup().await;
+        // A second apart, as a device's are: the same signature twice is a replay.
+        let clock = std::sync::atomic::AtomicI64::new(now() - 60);
         let request = |path: &'static str| {
             let state = state.clone();
-            async move { call(&state, signed(path, KEY, now())).await }
+            let ts = clock.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            async move { call(&state, signed(path, KEY, ts)).await }
         };
         let status = || async {
             let devices = super::devices::list(State(state.clone()), Path(1))
@@ -189,6 +195,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(downloads, 0);
+        // A private project's device gets them only through here, as the admin.
+        let path = "/api/v1/firmware/ab98/releases/v1.2.0/bootloader.bin";
+        let code = call(&state, signed(path, KEY, now())).await.0;
+        assert_eq!(code, axum::http::StatusCode::UNAUTHORIZED);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -217,6 +227,32 @@ mod tests {
         let id = created["id"].as_str().unwrap().parse().unwrap();
         req.headers_mut().insert("x-beacon-device", id);
         assert_eq!(call(&state, req).await.0, axum::http::StatusCode::OK);
+        // A public project's devices have no key to sync.
+        sqlx::query("UPDATE projects SET public = 1 WHERE id = 1")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let public_key = hex::encode(aws_lc_rs::signature::KeyPair::public_key(&public_key));
+        assert!(create(public_key).await.is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rename_device() {
+        let (state, dir) = setup().await;
+        let rename = |id: &str, name: &str| {
+            let input = serde_json::from_value(serde_json::json!({ "name": name })).unwrap();
+            super::devices::rename(State(state.clone()), Path(id.into()), axum::Json(input))
+        };
+        assert!(rename("dev_1", "  ").await.is_err());
+        assert!(rename("dev_nope", "x").await.is_err());
+        assert!(rename("dev_1", " shelf ").await.is_ok());
+        let devices = super::devices::list(State(state.clone()), Path(1))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        assert_eq!(serde_json::to_value(&devices[0]).unwrap()["name"], "shelf");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

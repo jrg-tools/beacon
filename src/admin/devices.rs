@@ -127,10 +127,7 @@ pub async fn create(
     Path(project_id): Path<i64>,
     Json(input): Json<DeviceInput>,
 ) -> Result<Json<Value>> {
-    let name = input.name.trim();
-    if name.is_empty() || name.len() > 100 {
-        return Err(status(StatusCode::BAD_REQUEST, "name is required"));
-    }
+    let name = valid_name(&input.name)?;
     let id = format!("dev_{}", hex::encode(rand::random::<[u8; 8]>()));
     let public_key = hex::decode(input.public_key.trim())
         .ok()
@@ -143,7 +140,7 @@ pub async fn create(
         })?;
     let done = sqlx::query(
         "INSERT INTO devices (id, project_id, name, public_key, created_at)
-         SELECT ?, id, ?, ?, ? FROM projects WHERE id = ?",
+         SELECT ?, id, ?, ?, ? FROM projects WHERE id = ? AND NOT public",
     )
     .bind(&id)
     .bind(name)
@@ -153,9 +150,40 @@ pub async fn create(
     .execute(&state.db)
     .await?;
     if done.rows_affected() == 0 {
-        return Err(status(StatusCode::NOT_FOUND, "no such project"));
+        // A public project's devices get their id unsigned (`device::handlers`); there is no key to sync.
+        return Err(status(StatusCode::NOT_FOUND, "no such private project"));
     }
     Ok(Json(json!({ "id": id })))
+}
+
+fn valid_name(name: &str) -> Result<&str> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 100 {
+        return Err(status(StatusCode::BAD_REQUEST, "name is required"));
+    }
+    Ok(name)
+}
+
+#[derive(Deserialize)]
+pub struct RenameInput {
+    name: String,
+}
+
+/// Mostly for a public project's devices, which start out "unnamed".
+pub async fn rename(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<RenameInput>,
+) -> Result<StatusCode> {
+    let done = sqlx::query("UPDATE devices SET name = ? WHERE id = ?")
+        .bind(valid_name(&input.name)?)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+    if done.rows_affected() == 0 {
+        return Err(status(StatusCode::NOT_FOUND, "no such device"));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode> {

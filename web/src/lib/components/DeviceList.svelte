@@ -1,12 +1,16 @@
 <script lang="ts">
-	import { api } from '#lib/api.ts';
+	import { api, register } from '#lib/api.ts';
 	import { ago, day } from '#lib/format.ts';
 	import { connect, hasSerial } from '#lib/serial.ts';
 	import type { Device } from '#lib/types.ts';
 	import BarChart from './BarChart.svelte';
 	import List from './List.svelte';
 
-	let { projectId, onchange }: { projectId: number; onchange: () => void } = $props();
+	let {
+		projectId,
+		isPublic,
+		onchange
+	}: { projectId: number; isPublic: boolean; onchange: () => void } = $props();
 
 	let devices = $state<Device[]>([]);
 	let error = $state('');
@@ -26,8 +30,6 @@
 		load();
 	});
 
-	// The board makes its own key pair and hands over only the public key, so the private key never
-	// leaves it. Each sync gets a fresh nonce, so resending keygen can't swap the key mid-sync.
 	async function sync(e: SubmitEvent) {
 		e.preventDefault();
 		error = '';
@@ -36,17 +38,9 @@
 		let board: Awaited<ReturnType<typeof connect>> | undefined;
 		try {
 			board = await connect();
-			const nonce = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) =>
-				b.toString(16).padStart(2, '0')
-			).join('');
-			const publicKey = await board.ask(`beacon keygen ${nonce}`, `beacon:pubkey ${nonce} `);
-			const { id } = await api.createDevice(projectId, name, publicKey);
-			await load();
-			onchange();
-			await board.ask(`beacon id ${id}`, `beacon:ok ${id}`).catch(() => {
-				throw new Error(
-					`Registered ${id}, but the device did not save it: revoke it and sync again.`
-				);
+			const id = await register(board, projectId, name).finally(() => {
+				load();
+				onchange();
 			});
 			synced = { name, id };
 			name = '';
@@ -74,6 +68,21 @@
 		failed: { dot: 'bg-red-500', label: 'failed, still on the old version' }
 	};
 
+	// The device being renamed, and the name typed so far.
+	let renaming = $state<{ id: string; name: string } | null>(null);
+
+	async function rename(e: SubmitEvent) {
+		e.preventDefault();
+		if (!renaming) return;
+		try {
+			await api.renameDevice(renaming.id, renaming.name);
+			renaming = null;
+			await load();
+		} catch (err) {
+			error = (err as Error).message;
+		}
+	}
+
 	async function revoke(device: Device) {
 		if (!confirm(`Revoke ${device.name}? It will no longer get updates.`)) return;
 		await api.deleteDevice(device.id).catch((err) => (error = err.message));
@@ -84,18 +93,25 @@
 
 <h2 class="mb-4 text-sm font-semibold text-zinc-500 uppercase">Devices · {devices.length}</h2>
 
-<form class="mb-4 flex gap-3" onsubmit={sync}>
-	<input bind:value={name} required maxlength="100" class="field" placeholder="New device name" />
-	<button
-		disabled={syncing || !hasSerial()}
-		class="shrink-0 cursor-pointer rounded-lg bg-yellow-400 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
-		>{syncing ? 'Syncing…' : 'Sync device'}</button
-	>
-</form>
-{#if !hasSerial()}
+{#if isPublic}
 	<p class="mb-4 text-xs text-zinc-500">
-		Syncing talks to the device over USB, which needs Chrome or Edge on a computer.
+		A public project's devices need no sync: each gets its id on its first update check or first
+		flash.
 	</p>
+{:else}
+	<form class="mb-4 flex gap-3" onsubmit={sync}>
+		<input bind:value={name} required maxlength="100" class="field" placeholder="New device name" />
+		<button
+			disabled={syncing || !hasSerial()}
+			class="shrink-0 cursor-pointer rounded-lg bg-yellow-400 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
+			>{syncing ? 'Syncing…' : 'Sync device'}</button
+		>
+	</form>
+	{#if !hasSerial()}
+		<p class="mb-4 text-xs text-zinc-500">
+			Syncing talks to the device over USB, which needs Chrome or Edge on a computer.
+		</p>
+	{/if}
 {/if}
 
 {#if synced}
@@ -111,8 +127,27 @@
 			<div class="flex flex-wrap items-center gap-x-3 gap-y-1 py-3 pr-2 pl-4">
 				<div class="min-w-0 flex-1">
 					<!-- The version pill wraps under a long name instead of being cut off. -->
-					<p class="flex flex-wrap items-center gap-x-2 gap-y-1 font-semibold">
-						<span class="min-w-0 truncate">{device.name}</span>
+					<div class="flex flex-wrap items-center gap-x-2 gap-y-1 font-semibold">
+						{#if renaming?.id === device.id}
+							<form class="flex min-w-0 gap-2" onsubmit={rename}>
+								<!-- svelte-ignore a11y_autofocus -->
+								<input
+									bind:value={renaming.name}
+									required
+									maxlength="100"
+									autofocus
+									aria-label="Device name"
+									class="field py-1"
+									onkeydown={(e) => e.key === 'Escape' && (renaming = null)}
+								/>
+								<button class="action">Save</button>
+								<button type="button" class="action" onclick={() => (renaming = null)}
+									>Cancel</button
+								>
+							</form>
+						{:else}
+							<span class="min-w-0 truncate">{device.name}</span>
+						{/if}
 						<span
 							class="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-500 dark:border-zinc-700"
 						>
@@ -127,7 +162,7 @@
 								? ' · update pending'
 								: ''}
 						</span>
-					</p>
+					</div>
 					<p class="truncate text-xs text-zinc-400">
 						{device.id} · seen {ago(device.last_seen)} · {device.checks} checks · {device.downloads}
 						downloads
@@ -148,6 +183,9 @@
 				<div class="hidden w-24 shrink-0 sm:block">
 					<BarChart title="{device.name}: requests per day" data={activity(device)} />
 				</div>
+				<button class="action" onclick={() => (renaming = { id: device.id, name: device.name })}
+					>Rename</button
+				>
 				<button class="action action-danger" onclick={() => revoke(device)}>Revoke</button>
 			</div>
 		{/snippet}

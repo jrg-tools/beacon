@@ -13,7 +13,7 @@ request. An admin UI behind Clerk manages projects and devices.
 | ------------------------ | ------------------------------------------------------------------- |
 | `app.rs`                 | Router: `/api/v1/firmware` (devices), `/admin` (UI + admin API)     |
 | `config.rs`, `state.rs`  | Environment settings; shared state                                  |
-| `device/auth.rs`         | Ed25519 signature check on every device request                     |
+| `device/auth.rs`         | Device auth: Ed25519 signatures (private), ids only (public)        |
 | `device/handlers.rs`     | `latest` and `download`                                             |
 | `install.rs`             | The public install page's version picker                            |
 | `firmware/version.rs`    | Semver: which release is newest, whether an update is available     |
@@ -24,11 +24,19 @@ request. An admin UI behind Clerk manages projects and devices.
 | `admin/clerk.rs`         | Clerk session tokens (JWKS) and roles                               |
 | `admin/projects.rs`, `admin/devices.rs` | Admin API                                            |
 
+## Public and private projects
+
+A project is **private** unless **Public** is ticked in its edit form. A private project's devices are
+registered with **Sync device** and sign every request; its first-flash files go only to an admin. A
+public project's devices sign nothing and need no sync: each sends only its id, and gets one from
+Beacon the first time it asks (see [Device API](#device-api)). Its first-flash files are open too.
+Switching a project from public to private leaves its devices without keys: sync them.
+
 ## Registering a device
 
-Plug the board in over USB, enter a name on the project page and click **Sync device** (Web Serial,
-so Chrome or Edge on a computer). The page talks to the firmware one line at a time, and the
-firmware's replies start with `beacon:` amid its log:
+Private projects only. Plug the board in over USB, enter a name on the project page and click
+**Sync device** (Web Serial, so Chrome or Edge on a computer). The page talks to the firmware one line
+at a time, and the firmware's replies start with `beacon:` amid its log:
 
 ```
 > beacon keygen <nonce>     < beacon:pubkey <nonce> <public key hex>
@@ -44,9 +52,10 @@ mayanhcu.
 ## Installing over USB
 
 **Install** on the project page opens `/firmware/<slug>` (the project page is `/admin/project/<slug>`).
-It needs no sign-in: pick a version (`GET /api/v1/install/{slug}`, tags and asset sizes only), plug
-the board in and click **Connect and install**. Everything else goes through the device API below,
-signed by the board over USB, so only a registered device of the project gets its firmware:
+It needs no sign-in: pick a version (`GET /api/v1/install/{slug}`, tags and asset sizes, plus a public
+project's first-flash files), plug the board in and click **Connect and install**. Everything else
+goes through the device API below, signed by the board over USB for a private project, so only a
+registered device of it gets its firmware:
 
 ```
 > beacon info                          < beacon:info <dev_...|none> <version>
@@ -54,6 +63,7 @@ signed by the board over USB, so only a registered device of the project gets it
 > beacon partitions                    < beacon:partitions <type,subtype,offset hex,size hex,label;...>
 ```
 
+A public project's board signs nothing (no `beacon sign`): the page sends its id alone.
 `beacon sign` signs the same message the board signs for its own requests (only `GET`s of
 `/api/v1/firmware/`), and the page sends it with the usual headers: `latest?current=<version>` checks
 the board is registered here (and records its version), then each asset is downloaded as a device
@@ -68,20 +78,27 @@ the air or with PlatformIO first.
 
 ### First flash
 
-A blank or bricked board has no app to answer, so **First flash** on the project page
-(`/admin/project/<slug>/flash`, admins only) does it differently. The project's **First flash only**
-field lists release files at fixed offsets, e.g. `bootloader.bin@0x0, partitions.bin@0x8000` (the
-bootloader goes at `0x1000` on the original ESP32). They are mirrored like the assets but never sent as
-an update: not in `latest`, not on the install page. The page downloads every file of the release
-through `GET /admin/api/projects/{id}/releases/{tag}/{asset}` (not a device download), reads the
+A blank or bricked board has no app to answer, so the install page can also do a first flash. The
+project's **First flash only** field lists release files at fixed offsets, e.g.
+`bootloader.bin@0x0, partitions.bin@0x8000` (the bootloader goes at `0x1000` on the original ESP32).
+They are mirrored like the assets but never sent as an update (not in `latest`). The page reads the
 partition table from whichever first-flash file is one, places the app and filesystem with it as an
-install does, erases the whole flash and writes everything. Then it waits for `beacon info`; register
-the board with **Sync device** afterwards.
+install does, erases the whole flash, writes everything and waits for `beacon info`. Then:
+
+- **Private project**: only a signed-in admin (the page loads their Clerk session) sees the
+  first-flash files and a **First flash (erase everything)** checkbox; unchecked, it is a normal
+  update. The files come through `GET /admin/api/projects/{id}/releases/{tag}/{asset}` (admin only,
+  not a device download; a device download of one is `401`). Once the board boots, the page asks for a
+  name and registers it as **Sync device** does.
+- **Public project**: no checkbox. A board that doesn't answer `beacon info` (blank or other firmware)
+  or answers with no id gets a first flash: the page asks `latest` without an id for a new one,
+  downloads every file as that device, flashes, and sends the id with `beacon id`. A board with an id
+  gets a normal update.
 
 ## Device API
 
-Every request carries three headers, signed with the device's Ed25519 private key. The device makes
-that key itself and never shares it; the server keeps only the public key.
+On a private project, every request carries three headers, signed with the device's Ed25519 private
+key. The device makes that key itself and never shares it; the server keeps only the public key.
 
 ```
 X-Beacon-Device:    dev_0123456789abcdef
@@ -89,14 +106,22 @@ X-Beacon-Timestamp: 1793412161                       # unix seconds, ±5 min: se
 X-Beacon-Signature: hex(Ed25519(private key, "<timestamp>\n<METHOD>\n<path?query>"))
 ```
 
-The signature covers the exact path and query sent. A wrong signature, unknown device or stale clock
-returns `401`; another project's path returns `403`.
+The signature covers the exact path and query sent, and works once: the same request again in the
+same second is a replay. A wrong or reused signature, unknown device or stale clock returns `401`;
+another project's path returns `403`.
+
+On a **public** project a device sends only `X-Beacon-Device` (no timestamp, no signature); an
+unknown id is `401`. A device with no id yet calls `latest` without the header: Beacon creates a device
+named `unnamed` and returns its id as `device` in the reply. The device stores it (over USB: `beacon id
+<id>`) and sends it from then on; any other request without an id is `401`. At most 30 new ids per
+project per minute (`429` beyond).
 
 `GET /api/v1/firmware/{project}/latest?current=v1.2.3[&channel=beta]` (`beta` also offers prereleases):
 
 ```json
 {
   "project": "ab98",
+  "device": "dev_0123456789abcdef",
   "current": "v1.2.3",
   "update_available": true,
   "latest": {
@@ -139,6 +164,9 @@ void addBeaconHeaders(HTTPClient* http, const String& pathQuery) {
   http->addHeader("X-Beacon-Signature", beaconSignature(BEACON_PRIVATE_KEY, ts, "GET", pathQuery));
 }
 ```
+
+For a public project, send only `X-Beacon-Device` (skip it while the device has no id) and save the
+`device` field of `latest`'s reply when it differs from the stored id.
 
 ## Admin
 

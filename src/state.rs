@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -24,6 +25,8 @@ pub struct State {
     pub sync_lock: Mutex<()>,
     /// One GitHub download at a time (see `firmware::cache::ensure`).
     pub fetch_lock: Mutex<()>,
+    /// Device signatures accepted within the clock window, with their timestamps (see `device::auth`).
+    pub seen_signatures: std::sync::Mutex<HashMap<Vec<u8>, i64>>,
 }
 
 impl State {
@@ -44,6 +47,7 @@ impl State {
             ui_dir,
             sync_lock: Mutex::new(()),
             fetch_lock: Mutex::new(()),
+            seen_signatures: Default::default(),
         })
     }
 }

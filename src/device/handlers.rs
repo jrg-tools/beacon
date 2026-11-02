@@ -97,7 +97,7 @@ pub async fn latest(
         .ok_or(status(StatusCode::NOT_FOUND, "no release"))?;
     let mut assets = Vec::new();
     for asset in store::release_assets(&state.db, release.id).await? {
-        // Bootloader and partition table: written once by the admin, never as an update.
+        // Bootloader and partition table: written once by the first flash, never as an update.
         if store::first_flash_names(&device.first_flash).any(|n| n == asset.name) {
             continue;
         }
@@ -112,6 +112,8 @@ pub async fn latest(
     }
     Ok(Json(json!({
         "project": project,
+        // A public project's new device learns its id here (see `auth::issue`).
+        "device": device.id,
         "current": q.current,
         "update_available": version::update_available(&version, q.current.as_deref()),
         "latest": {
@@ -131,6 +133,13 @@ pub async fn download(
     Path((project, tag, name)): Path<(String, String, String)>,
 ) -> Result<Response> {
     device.check_project(&project)?;
+    // A private project's bootloader and partition table: only the admin's first flash gets them.
+    if !device.public && store::first_flash_names(&device.first_flash).any(|n| n == name) {
+        return Err(status(
+            StatusCode::UNAUTHORIZED,
+            "first-flash files are admin only",
+        ));
+    }
     let asset = store::find_asset(&state.db, device.project_id, &tag, &name)
         .await?
         .ok_or(status(StatusCode::NOT_FOUND, "no such asset"))?;

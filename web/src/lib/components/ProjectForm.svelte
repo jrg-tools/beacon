@@ -17,7 +17,8 @@
 		slug: project?.slug ?? '',
 		repo: project?.repo ?? '',
 		assets: project?.assets ?? '',
-		first_flash: project?.first_flash ?? ''
+		first_flash: project?.first_flash ?? '',
+		public: project?.public ?? false
 	});
 
 	let saving = $state(false);
@@ -110,6 +111,17 @@
 		<span class="text-xs text-zinc-500">
 			Release files a blank board needs, as name@offset (hex): written by the first flash, never
 			sent as an update. The partition table among them places the assets.
+		</span>
+	</label>
+
+	<label class="flex items-start gap-3">
+		<input type="checkbox" bind:checked={draft.public} class="mt-1 size-4 accent-yellow-400" />
+		<span class="space-y-0.5">
+			<span class="block text-sm font-semibold">Public</span>
+			<span class="block text-xs text-zinc-500">
+				Anyone can install and first-flash it. Devices send only their id, unsigned, and get one
+				from Beacon on their first update check: no sync. Private projects sign every request.
+			</span>
 		</span>
 	</label>
 

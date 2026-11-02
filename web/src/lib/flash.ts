@@ -1,7 +1,7 @@
 // Writes a release onto a board over USB with esptool-js, keeping its NVS (WiFi, Beacon key and id).
 // Where each image goes comes from the board's own partition table, which the running app reports
 // (esptool-js's readFlash stalls on the ESP32-S3's USB port), so one page fits every project.
-// A blank board's first flash (admin only) takes the table from the release's partitions.bin instead.
+// A blank board's first flash takes the table from the release's partitions.bin instead.
 
 import { ESPLoader, Transport } from 'esptool-js';
 import type { SerialPort } from './serial.ts';
@@ -87,6 +87,45 @@ export function place(table: Partition[], assets: { name: string; data: Uint8Arr
 			address: otadata.offset
 		});
 	return { files, skipped };
+}
+
+/** A project's `first_flash` ("bootloader.bin@0x0,partitions.bin@0x8000", as the server normalised it). */
+export function extras(firstFlash: string) {
+	return firstFlash
+		.split(',')
+		.filter(Boolean)
+		.map((entry) => {
+			const [name, offset] = entry.split('@');
+			return { name, address: parseInt(offset, 16) };
+		});
+}
+
+/**
+ * A first flash's files: the extras at their offsets, then the assets placed with the partition
+ * table among the extras. Throws if an extra is missing or none is a partition table.
+ */
+export function firstFlashFiles(
+	firstFlash: { name: string; address: number }[],
+	downloaded: { name: string; data: Uint8Array }[],
+	tag: string
+) {
+	const files: { name: string; data: Uint8Array; address: number }[] = [];
+	const assets: { name: string; data: Uint8Array }[] = [];
+	for (const asset of downloaded) {
+		const extra = firstFlash.find((e) => e.name === asset.name);
+		if (extra) files.push({ ...asset, address: extra.address });
+		else assets.push(asset);
+	}
+	const missing = firstFlash.filter((e) => !files.some((f) => f.name === e.name));
+	if (missing.length) throw new Error(`${tag} has no ${missing.map((e) => e.name).join(', ')}.`);
+	const table = files.map((f) => tableFromImage(f.data)).find((t) => t.length) ?? [];
+	if (!table.length)
+		throw new Error(
+			'No first-flash file is a partition table: add partitions.bin@0x8000 on the project.'
+		);
+	const placed = place(table, assets);
+	files.push(...placed.files.filter((p) => !files.some((f) => f.address === p.address)));
+	return { files, table, skipped: placed.skipped };
 }
 
 /**

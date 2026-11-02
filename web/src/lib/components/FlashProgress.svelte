@@ -7,7 +7,7 @@
 </script>
 
 <script lang="ts">
-	// The steps, flash progress and log of a USB flash: the install page and the admin's first flash.
+	// The steps, flash progress and log of a USB flash (the install page's update and first flash).
 	import { tick } from 'svelte';
 
 	interface Props {

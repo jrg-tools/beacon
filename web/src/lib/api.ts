@@ -74,6 +74,8 @@ export const api = {
 			`/projects/${id}/devices`,
 			send('POST', { name, public_key: publicKey })
 		),
+	renameDevice: (id: string, name: string) =>
+		request<null>(`/devices/${id}`, send('PATCH', { name })),
 	deleteDevice: (id: string) => request<null>(`/devices/${id}`, send('DELETE'))
 };
 
@@ -82,17 +84,22 @@ export const projectReleases = (slug: string) => json<InstallProject>(`/api/v1/i
 
 /**
  * A device API request (`/api/v1/firmware/…`) made for the board, with the headers it signed over
- * USB; the server checks them as it checks the board's own requests.
+ * USB; the server checks them as it checks the board's own requests. A public project's board sends
+ * only its id, and none at all for its first `latest`, which gives it one.
  */
 export async function deviceGet(
 	path: string,
-	headers: { device: string; timestamp: number; signature: string }
+	headers: { device?: string; timestamp?: number; signature?: string }
 ): Promise<Response> {
 	const res = await fetch(path, {
 		headers: {
-			'X-Beacon-Device': headers.device,
-			'X-Beacon-Timestamp': String(headers.timestamp),
-			'X-Beacon-Signature': headers.signature
+			...(headers.device ? { 'X-Beacon-Device': headers.device } : {}),
+			...(headers.signature
+				? {
+						'X-Beacon-Timestamp': String(headers.timestamp),
+						'X-Beacon-Signature': headers.signature
+					}
+				: {})
 		}
 	});
 	if (!res.ok) {
@@ -100,4 +107,24 @@ export async function deviceGet(
 		throw new ApiError(body.error ?? res.statusText, res.status);
 	}
 	return res;
+}
+
+/**
+ * Sync device: the board makes its own key pair and hands over only the public key, so the private
+ * key never leaves it. Each sync gets a fresh nonce, so resending keygen can't swap the key mid-sync.
+ */
+export async function register(
+	board: { ask(command: string, reply: string): Promise<string> },
+	projectId: number,
+	name: string
+): Promise<string> {
+	const nonce = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) =>
+		b.toString(16).padStart(2, '0')
+	).join('');
+	const publicKey = await board.ask(`beacon keygen ${nonce}`, `beacon:pubkey ${nonce} `);
+	const { id } = await api.createDevice(projectId, name, publicKey);
+	await board.ask(`beacon id ${id}`, `beacon:ok ${id}`).catch(() => {
+		throw new Error(`Registered ${id}, but the device did not save it: revoke it and sync again.`);
+	});
+	return id;
 }

@@ -34,6 +34,7 @@ pub struct ProjectRow {
     repo: String,
     assets: String,
     first_flash: String,
+    public: bool,
     synced_at: Option<i64>,
     sync_error: Option<String>,
     releases: i64,
@@ -44,7 +45,7 @@ pub struct ProjectRow {
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ProjectRow>>> {
     let mut rows: Vec<ProjectRow> = sqlx::query_as(
-        "SELECT p.id, p.slug, p.name, p.emoji, p.repo, p.assets, p.first_flash, p.synced_at, p.sync_error,
+        "SELECT p.id, p.slug, p.name, p.emoji, p.repo, p.assets, p.first_flash, p.public, p.synced_at, p.sync_error,
            (SELECT COUNT(*) FROM releases WHERE project_id = p.id) AS releases,
            (SELECT COUNT(*) FROM devices WHERE project_id = p.id) AS devices
          FROM projects p ORDER BY p.name",
@@ -65,8 +66,8 @@ pub async fn create(
 ) -> Result<Json<Value>> {
     let p = input.validate()?;
     let (id,): (i64,) = sqlx::query_as(
-        "INSERT INTO projects (slug, name, emoji, repo, assets, first_flash, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO projects (slug, name, emoji, repo, assets, first_flash, public, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(&p.slug)
@@ -75,6 +76,7 @@ pub async fn create(
     .bind(&p.repo)
     .bind(&p.assets)
     .bind(&p.first_flash)
+    .bind(p.public)
     .bind(now())
     .fetch_one(&state.db)
     .await
@@ -90,8 +92,8 @@ pub async fn update(
 ) -> Result<StatusCode> {
     let p = input.validate()?;
     let done = sqlx::query(
-        "UPDATE projects SET slug = ?, name = ?, emoji = ?, repo = ?, assets = ?, first_flash = ?
-         WHERE id = ?",
+        "UPDATE projects SET slug = ?, name = ?, emoji = ?, repo = ?, assets = ?, first_flash = ?,
+           public = ? WHERE id = ?",
     )
     .bind(&p.slug)
     .bind(&p.name)
@@ -99,6 +101,7 @@ pub async fn update(
     .bind(&p.repo)
     .bind(&p.assets)
     .bind(&p.first_flash)
+    .bind(p.public)
     .bind(id)
     .execute(&state.db)
     .await
