@@ -21,7 +21,7 @@ use crate::{
 };
 
 /// How far a device clock may drift; devices set theirs over NTP.
-const MAX_SKEW_SECS: i64 = 300;
+const MAX_SKEW_SECS: u64 = 300;
 
 /// The signed-in device, put in the request extensions for the handlers.
 #[derive(Clone, sqlx::FromRow)]
@@ -93,7 +93,8 @@ pub async fn authenticate(
     ) else {
         return Err(denied());
     };
-    if (now() - timestamp).abs() > MAX_SKEW_SECS {
+    // abs_diff: the timestamp is the caller's, so `now - ts` could overflow.
+    if now().abs_diff(timestamp) > MAX_SKEW_SECS {
         return Err(status(
             StatusCode::UNAUTHORIZED,
             "timestamp out of range, check the device clock",
@@ -118,7 +119,7 @@ pub async fn authenticate(
     {
         let mut seen = state.seen_signatures.lock().unwrap();
         let at = now();
-        seen.retain(|_, ts| (at - *ts).abs() <= MAX_SKEW_SECS);
+        seen.retain(|_, ts| at.abs_diff(*ts) <= MAX_SKEW_SECS);
         if seen.insert(sig, timestamp).is_some() {
             return Err(status(StatusCode::UNAUTHORIZED, "request already used"));
         }
@@ -127,37 +128,46 @@ pub async fn authenticate(
     Ok(next.run(req).await)
 }
 
+/// A device id: `dev_` and 16 hex digits.
+pub fn new_id() -> String {
+    format!("dev_{}", hex::encode(rand::random::<[u8; 8]>()))
+}
+
+/// How many ids a public project hands out per minute.
+const NEW_PER_MINUTE: i64 = 30;
+
 /// A new device of a public project, named "unnamed"; `None` if the
 /// project is private or unknown. `latest` returns its id, which the device keeps from then on.
 async fn issue(state: &AppState, slug: &str) -> Result<Option<Device>> {
-    // A cap per project, not per IP: enough to stop a loop filling the table.
-    // shortcut: a flood also blocks real new boards for a minute; key it by IP if that happens.
-    let (recent,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM devices d JOIN projects p ON p.id = d.project_id
-         WHERE p.slug = ? AND d.created_at > ?",
-    )
-    .bind(slug)
-    .bind(now() - 60)
-    .fetch_one(&state.db)
-    .await?;
-    if recent >= 30 {
-        return Err(status(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too many new devices, try again later",
-        ));
-    }
-    let id = format!("dev_{}", hex::encode(rand::random::<[u8; 8]>()));
+    // A cap per project, not per IP: enough to stop a loop filling the table. Counted in the insert,
+    // so concurrent requests can't pass it together; ids never used again are pruned (`sync::every`).
+    // shortcut: a flood also blocks real new boards for a minute; key it by IP (behind a trusted proxy) if that happens.
+    let id = new_id();
+    let at = now();
     let done = sqlx::query(
         "INSERT INTO devices (id, project_id, name, created_at)
-         SELECT ?, id, 'unnamed', ? FROM projects WHERE slug = ? AND public",
+         SELECT ?, p.id, 'unnamed', ? FROM projects p WHERE p.slug = ? AND p.public
+           AND (SELECT COUNT(*) FROM devices d WHERE d.project_id = p.id AND d.created_at > ?) < ?",
     )
     .bind(&id)
-    .bind(now())
+    .bind(at)
     .bind(slug)
+    .bind(at - 60)
+    .bind(NEW_PER_MINUTE)
     .execute(&state.db)
     .await?;
     if done.rows_affected() == 0 {
-        return Ok(None);
+        let public: Option<(bool,)> = sqlx::query_as("SELECT public FROM projects WHERE slug = ?")
+            .bind(slug)
+            .fetch_optional(&state.db)
+            .await?;
+        return match public {
+            Some((true,)) => Err(status(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many new devices, try again later",
+            )),
+            _ => Ok(None),
+        };
     }
     Ok(Some(
         sqlx::query_as(DEVICE)

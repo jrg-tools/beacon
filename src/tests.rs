@@ -53,7 +53,13 @@ pub(crate) async fn setup() -> (AppState, PathBuf) {
         "pk_test_{}",
         base64::engine::general_purpose::STANDARD.encode("x.clerk.accounts.dev$")
     );
-    let clerk = admin::Clerk::new("sk".into(), pk, "beacon".into()).unwrap();
+    let clerk = admin::Clerk::new(
+        "sk".into(),
+        pk,
+        "beacon".into(),
+        vec!["https://beacon.test".into()],
+    )
+    .unwrap();
     let github = github::GitHub {
         http: http.clone(),
         token: None,
@@ -283,5 +289,77 @@ async fn admin_routes() {
         (code, headers["location"].to_str().unwrap()),
         (StatusCode::PERMANENT_REDIRECT, "/admin")
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn hostile_input_is_refused_without_panicking() {
+    let (state, dir) = setup().await;
+    let latest = "/api/v1/firmware/ab98/latest";
+    // `now - ts` would overflow these; `now + i64::MIN` used to wrap into the window.
+    for ts in [i64::MIN, i64::MAX, now().wrapping_add(i64::MIN)] {
+        assert_eq!(
+            call(&state, signed(latest, KEY, ts)).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    // Stored with every check, so its length is capped.
+    let long = format!("{latest}?current={}", "1".repeat(65));
+    assert_eq!(
+        call(&state, signed(&long, KEY, now())).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn public_ids_are_capped_per_minute() {
+    let (state, dir) = setup().await;
+    sqlx::query("UPDATE projects SET public = 1 WHERE id = 1")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    for i in 0..29 {
+        sqlx::query(
+            "INSERT INTO devices (id, project_id, name, created_at) VALUES (?, 1, 'unnamed', ?)",
+        )
+        .bind(format!("dev_x{i}"))
+        .bind(now())
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+    let latest = "/api/v1/firmware/ab98/latest";
+    assert_eq!(call(&state, get(latest)).await.0, StatusCode::OK); // the 30th
+    assert_eq!(
+        call(&state, get(latest)).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // A known device is not a new one.
+    assert_eq!(
+        call(&state, with_id(latest, "dev_1")).await.0,
+        StatusCode::OK
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn latest_uses_github_digest_before_caching() {
+    let (state, dir) = setup().await;
+    // Not cached, and no GitHub to fetch it from: `latest` must not need it.
+    sqlx::query("UPDATE assets SET sha256 = NULL, md5 = NULL, digest = 'ee' WHERE github_id = 77")
+        .execute(&state.db)
+        .await
+        .unwrap();
+    std::fs::remove_file(state.cache_dir.join("77.bin")).unwrap();
+    let (code, _, body) = call(&state, signed("/api/v1/firmware/ab98/latest", KEY, now())).await;
+    assert_eq!(code, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let asset = &json["latest"]["assets"][0];
+    assert_eq!(
+        (&asset["sha256"], &asset["md5"]),
+        (&"ee".into(), &serde_json::Value::Null)
+    );
+    assert_eq!(asset["size"], 5);
     std::fs::remove_dir_all(dir).unwrap();
 }

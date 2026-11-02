@@ -1,17 +1,20 @@
-//! The public install page's version picker (`/firmware/{slug}` in the UI), without a private
-//! project's first-flash files. Everything else the page does goes through the device API, signed by
-//! the board over USB (`beacon sign` in the firmware) for a private project, so only a registered
-//! device of it ever gets its firmware.
+//! The install page's version picker (`/firmware/{slug}` in the UI). A public project's is open to
+//! anyone, first-flash files included; a private project's only to an admin (without its first-flash
+//! files, which the admin API serves): anyone else gets the same 404 as an unknown slug, so the
+//! project's name and releases stay private. A private project's owner still updates their board: the
+//! page asks the device API's `latest` as the board, signed over USB (`beacon sign` in the firmware),
+//! so only a registered device of it ever gets its firmware.
 
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::get,
 };
 use serde_json::{Value, json};
 
 use crate::{
+    admin,
     error::{Result, status},
     firmware::store,
     state::AppState,
@@ -22,14 +25,24 @@ pub fn router() -> Router<AppState> {
 }
 
 /// The project and its releases (tags and asset sizes, no files).
-async fn project(State(state): State<AppState>, Path(slug): Path<String>) -> Result<Json<Value>> {
+async fn project(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>> {
+    let not_found = || status(StatusCode::NOT_FOUND, "no such project");
     let (name, emoji, id, mut first_flash, public): (String, String, i64, String, bool) =
         sqlx::query_as("SELECT name, emoji, id, first_flash, public FROM projects WHERE slug = ?")
             .bind(&slug)
             .fetch_optional(&state.db)
             .await?
-            .ok_or(status(StatusCode::NOT_FOUND, "no such project"))?;
-    // A public project's first flash is open to anyone; a private one's is the admin's (admin API).
+            .ok_or_else(not_found)?;
+    if !public {
+        admin::check_admin(&state, &headers)
+            .await
+            .map_err(|_| not_found())?;
+    }
+    // A private project's first-flash files go only through the admin API.
     let hidden = if public {
         String::new()
     } else {
@@ -38,11 +51,12 @@ async fn project(State(state): State<AppState>, Path(slug): Path<String>) -> Res
     let latest = store::latest_release(&state.db, id, false)
         .await?
         .map(|(_, r)| r.tag);
+    let assets = store::project_assets(&state.db, id).await?;
     let mut releases = Vec::new();
     for r in store::releases(&state.db, id).await? {
-        let assets: Vec<Value> = store::release_assets(&state.db, r.id)
-            .await?
-            .into_iter()
+        let assets: Vec<Value> = assets
+            .iter()
+            .filter(|a| a.release_id == r.id)
             .filter(|a| !store::first_flash_names(&hidden).any(|n| n == a.name))
             .map(|a| json!({ "name": a.name, "size": a.size }))
             .collect();
@@ -60,21 +74,35 @@ mod tests {
     use crate::tests::{call, setup};
 
     #[tokio::test]
-    async fn lists_releases_without_files() {
+    async fn private_projects_only_for_admins() {
         let (state, dir) = setup().await;
         let get = |path: &str| Request::get(path).body(Body::empty()).unwrap();
-        let (code, _, body) = call(&state, get("/api/v1/install/ab98")).await;
+        // A private project looks exactly like an unknown one, without an admin's session.
+        let private = call(&state, get("/api/v1/install/ab98")).await;
+        let unknown = call(&state, get("/api/v1/install/nope")).await;
+        assert_eq!(private.0, StatusCode::NOT_FOUND);
+        assert_eq!((private.0, private.2), (unknown.0, unknown.2));
+        state.clerk.trust_test_admin("user_admin").await;
+        let as_user = |user: &str, azp: &str| {
+            let token = state.clerk.test_token(user, azp);
+            Request::get("/api/v1/install/ab98")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap()
+        };
+        // Another app's token, even an admin's, is not enough.
+        let other_app = call(&state, as_user("user_admin", "https://other.test")).await;
+        assert_eq!(other_app.0, StatusCode::NOT_FOUND);
+
+        let (code, _, body) = call(&state, as_user("user_admin", "https://beacon.test")).await;
         assert_eq!(code, StatusCode::OK);
         let project: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(project["latest"], "v1.2.0");
-        let release = &project["releases"][0];
+        // Its first-flash files are the admin API's.
+        assert_eq!(project["first_flash"], "");
         assert_eq!(
-            release["assets"][0],
-            serde_json::json!({ "name": "firmware.bin", "size": 5 })
-        );
-        assert_eq!(
-            call(&state, get("/api/v1/install/nope")).await.0,
-            StatusCode::NOT_FOUND
+            project["releases"][0]["assets"],
+            serde_json::json!([{ "name": "firmware.bin", "size": 5 }])
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

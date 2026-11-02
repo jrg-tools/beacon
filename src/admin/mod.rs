@@ -5,6 +5,7 @@ mod clerk;
 mod devices;
 mod project_input;
 mod projects;
+mod stats;
 
 use std::path::Path;
 
@@ -18,6 +19,7 @@ use axum::{
 use serde_json::{Value, json};
 use tower_http::services::ServeFile;
 
+pub use auth::check_admin;
 pub use clerk::Clerk;
 
 use crate::{error::status, state::AppState};
@@ -35,7 +37,7 @@ pub fn router(state: AppState, ui_dir: &Path) -> Router<AppState> {
             "/projects/{id}/releases/{tag}/{asset}",
             get(projects::download),
         )
-        .route("/projects/{id}/stats", get(projects::stats))
+        .route("/projects/{id}/stats", get(stats::stats))
         .route(
             "/projects/{id}/devices",
             get(devices::list).post(devices::create),
@@ -79,7 +81,7 @@ mod tests {
             call(&state, signed(path, KEY, now())).await;
         }
 
-        let stats = super::projects::stats(State(state.clone()), Path(1))
+        let stats = super::stats::stats(State(state.clone()), Path(1))
             .await
             .ok()
             .unwrap()
@@ -92,7 +94,7 @@ mod tests {
         assert_eq!(stats["channels"]["beta"], 1);
         assert_eq!(stats["versions"]["v1.2.0"], 1);
         let days = stats["days"].as_array().unwrap();
-        assert_eq!(days.len(), super::projects::DAYS as usize);
+        assert_eq!(days.len(), super::stats::DAYS as usize);
         let today = days.last().unwrap();
         assert_eq!(
             (today["checks"].clone(), today["downloads"].clone()),
@@ -143,7 +145,7 @@ mod tests {
                 .unwrap()
                 .0;
             let device = serde_json::to_value(&devices[0]).unwrap();
-            let stats = super::projects::stats(State(state.clone()), Path(1))
+            let stats = super::stats::stats(State(state.clone()), Path(1))
                 .await
                 .ok()
                 .unwrap()

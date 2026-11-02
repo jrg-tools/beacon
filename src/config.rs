@@ -12,6 +12,7 @@ pub struct Config {
     pub clerk_secret_key: String,
     pub clerk_publishable_key: String,
     pub clerk_scope: String,
+    pub clerk_authorized_parties: Vec<String>,
     pub sync_interval: Duration,
 }
 
@@ -41,6 +42,9 @@ impl Config {
             clerk_secret_key: required("CLERK_SECRET_KEY")?,
             clerk_publishable_key: required("CLERK_PUBLISHABLE_KEY")?,
             clerk_scope: optional("CLERK_SCOPE").unwrap_or_else(|| "beacon".into()),
+            clerk_authorized_parties: optional("CLERK_AUTHORIZED_PARTIES")
+                .map(|s| s.split(',').map(|p| p.trim().to_string()).collect())
+                .unwrap_or_default(),
             sync_interval: Duration::from_secs(sync_secs),
         })
     }

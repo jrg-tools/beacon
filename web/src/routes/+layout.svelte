@@ -6,10 +6,8 @@
 	import './layout.css';
 
 	let { children } = $props();
-	// The key comes from the server at runtime, so one build works for every Clerk instance.
-	const config = fetchConfig();
 	// The install page needs no sign-in: the board's signature is its credential (src/install.rs).
-	// Clerk still loads there, so a signed-in admin also gets the first flash of a private project.
+	// Clerk doesn't load there unless an admin asks to sign in (AdminSignIn.svelte).
 	const signInFree = $derived(page.route.id?.startsWith('/firmware/') ?? false);
 	const year = new Date().getFullYear();
 	// As in jrg-life: the header follows scrollY (scroll-driven CSS doesn't run in Safari or Firefox).
@@ -37,12 +35,13 @@
 {/snippet}
 
 <div class="flex min-h-screen flex-col">
-	{#await config then { clerk_publishable_key }}
-		<ClerkProvider publishableKey={clerk_publishable_key}>
-			{#if signInFree}
-				{@render shell(false)}
-				<main class="mt-20 flex-grow sm:mt-24">{@render children()}</main>
-			{:else}
+	{#if signInFree}
+		{@render shell(false)}
+		<main class="mt-20 flex-grow sm:mt-24">{@render children()}</main>
+	{:else}
+		<!-- The key comes from the server at runtime, so one build works for every Clerk instance. -->
+		{#await fetchConfig() then { clerk_publishable_key }}
+			<ClerkProvider publishableKey={clerk_publishable_key}>
 				<Show when="signed-in">
 					{@render shell(true)}
 					<main class="mt-20 flex-grow sm:mt-24">{@render children()}</main>
@@ -53,14 +52,14 @@
 						</main>
 					{/snippet}
 				</Show>
-			{/if}
-		</ClerkProvider>
-	{:catch error}
-		{@render shell(false)}
-		<main class="mt-20 flex-grow px-6 py-8 sm:mt-24">
-			<p class="text-sm font-semibold text-red-600" role="alert">{error.message}</p>
-		</main>
-	{/await}
+			</ClerkProvider>
+		{:catch error}
+			{@render shell(false)}
+			<main class="mt-20 flex-grow px-6 py-8 sm:mt-24">
+				<p class="text-sm font-semibold text-red-600" role="alert">{error.message}</p>
+			</main>
+		{/await}
+	{/if}
 
 	<footer class="bg-zinc-100/20 select-none dark:bg-zinc-900/30">
 		<div class="mx-auto w-full max-w-screen-xl px-4 py-6 sm:px-6 lg:py-8">

@@ -3,8 +3,6 @@
 
 -include .env
 export
-# Without a token in .env, use the gh CLI's login (private repos need one).
-GITHUB_TOKEN ?= $(shell gh auth token 2>/dev/null)
 
 WEB_SRC := $(shell find web/src web/static -type f) web/vite.config.ts web/package.json
 
@@ -35,7 +33,7 @@ test: web/node_modules ## Every check CI runs
 	cargo fmt --check
 	cargo clippy --locked --all-targets -- -D warnings
 	cargo test --locked
-	cd web && pnpm run lint && pnpm run check && pnpm run build
+	cd web && pnpm run lint && pnpm run check && pnpm run test && pnpm audit && pnpm run build
 
 fmt: web/node_modules ## Format Rust and the UI
 	cargo fmt

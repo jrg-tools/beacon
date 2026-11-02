@@ -19,7 +19,7 @@
 
 	async function load() {
 		try {
-			const found = (await api.projects()).find((p) => p.slug === slug) ?? null;
+			const found = await api.project(slug);
 			stats = found ? await api.stats(found.id) : null;
 			project = found;
 			error = project ? '' : 'No such project.';

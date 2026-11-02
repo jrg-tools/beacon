@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { api, register } from '#lib/api.ts';
 	import { ago, day } from '#lib/format.ts';
 	import { connect, hasSerial } from '#lib/serial.ts';
@@ -18,16 +19,20 @@
 	let synced = $state<{ name: string; id: string } | null>(null);
 	let syncing = $state(false);
 
-	async function load() {
+	async function load(id = projectId) {
 		try {
-			devices = await api.devices(projectId);
+			devices = await api.devices(id);
 		} catch (err) {
 			error = (err as Error).message;
 		}
 	}
+	// Only `projectId` is tracked: another project opened.
 	$effect(() => {
-		synced = null; // it belongs to the project it was made for
-		load();
+		const id = projectId;
+		untrack(() => {
+			synced = null; // it belongs to the project it was made for
+			load(id);
+		});
 	});
 
 	async function sync(e: SubmitEvent) {

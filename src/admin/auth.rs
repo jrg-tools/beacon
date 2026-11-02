@@ -18,16 +18,22 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .strip_prefix("Bearer ")
 }
 
-/// Every admin API call: a valid Clerk session whose user has the admin role.
+/// A valid Clerk session whose user has the admin role.
+pub async fn check_admin(state: &AppState, headers: &HeaderMap) -> Result<()> {
+    let token = bearer(headers).ok_or(status(StatusCode::UNAUTHORIZED, "sign in"))?;
+    let user_id = state.clerk.verify(&state.http, token).await?;
+    if !state.clerk.is_admin(&state.http, &user_id).await? {
+        return Err(status(StatusCode::FORBIDDEN, "admin role required"));
+    }
+    Ok(())
+}
+
+/// Every admin API call.
 pub async fn require_admin(
     State(state): State<AppState>,
     req: Request,
     next: Next,
 ) -> Result<Response> {
-    let token = bearer(req.headers()).ok_or(status(StatusCode::UNAUTHORIZED, "sign in"))?;
-    let user_id = state.clerk.verify(&state.http, token).await?;
-    if !state.clerk.is_admin(&state.http, &user_id).await? {
-        return Err(status(StatusCode::FORBIDDEN, "admin role required"));
-    }
+    check_admin(&state, req.headers()).await?;
     Ok(next.run(req).await)
 }

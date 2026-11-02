@@ -11,18 +11,18 @@ request. An admin UI behind Clerk manages projects and devices.
 
 | Module                   | Job                                                                 |
 | ------------------------ | ------------------------------------------------------------------- |
-| `app.rs`                 | Router: `/api/v1/firmware` (devices), `/admin` (UI + admin API)     |
+| `app.rs`                 | Router: `/api/v1/firmware` (devices), `/admin` (UI + admin API); security headers and CSP |
 | `config.rs`, `state.rs`  | Environment settings; shared state                                  |
 | `device/auth.rs`         | Device auth: Ed25519 signatures (private), ids only (public)        |
 | `device/handlers.rs`     | `latest` and `download`                                             |
-| `install.rs`             | The public install page's version picker                            |
+| `install.rs`             | The install page's version picker (public projects, or an admin)   |
 | `firmware/version.rs`    | Semver: which release is newest, whether an update is available     |
 | `firmware/store.rs`      | Release and asset queries                                           |
-| `firmware/cache.rs`      | Assets on disk, fetched from GitHub on first use                    |
+| `firmware/cache.rs`      | Assets on disk, fetched from GitHub on first use, and served        |
 | `firmware/sync.rs`       | GitHub → SQLite mirror (every `SYNC_INTERVAL_SECS`, default 2 days, and "Sync now")   |
 | `github.rs`              | GitHub REST client                                                  |
 | `admin/clerk.rs`         | Clerk session tokens (JWKS) and roles                               |
-| `admin/projects.rs`, `admin/devices.rs` | Admin API                                            |
+| `admin/projects.rs`, `admin/devices.rs`, `admin/stats.rs` | Admin API                          |
 
 ## Public and private projects
 
@@ -52,10 +52,18 @@ mayanhcu.
 ## Installing over USB
 
 **Install** on the project page opens `/firmware/<slug>` (the project page is `/admin/project/<slug>`).
-It needs no sign-in: pick a version (`GET /api/v1/install/{slug}`, tags and asset sizes, plus a public
-project's first-flash files), plug the board in and click **Connect and install**. Everything else
-goes through the device API below, signed by the board over USB for a private project, so only a
-registered device of it gets its firmware:
+It needs no sign-in and loads no Clerk script.
+
+- **Public project**: pick a version (`GET /api/v1/install/{slug}`: tags, asset sizes and the
+  first-flash files), plug the board in and click **Connect and install**.
+- **Private project**: `GET /api/v1/install/{slug}` is a `404`, the same as for an unknown slug, unless
+  the caller is an admin (Clerk session in `Authorization: Bearer`), so nobody else learns its name or
+  releases. The page shows one **Connect and update** button: the board signs a `latest` check and
+  gets the newest release for it, whose tag shows only then. **Admin sign-in** on the page loads Clerk;
+  an admin then gets the version picker and the first flash.
+
+Everything else goes through the device API below, signed by the board over USB for a private project,
+so only a registered device of it gets its firmware:
 
 ```
 > beacon info                          < beacon:info <dev_...|none> <version>
@@ -85,13 +93,14 @@ They are mirrored like the assets but never sent as an update (not in `latest`).
 partition table from whichever first-flash file is one, places the app and filesystem with it as an
 install does, erases the whole flash, writes everything and waits for `beacon info`. Then:
 
-- **Private project**: only a signed-in admin (the page loads their Clerk session) sees the
+- **Private project**: only an admin, after **Admin sign-in**, sees the
   first-flash files and a **First flash (erase everything)** checkbox; unchecked, it is a normal
   update. The files come through `GET /admin/api/projects/{id}/releases/{tag}/{asset}` (admin only,
   not a device download; a device download of one is `401`). Once the board boots, the page asks for a
   name and registers it as **Sync device** does.
 - **Public project**: no checkbox. A board that doesn't answer `beacon info` (blank or other firmware)
-  or answers with no id gets a first flash: the page asks `latest` without an id for a new one,
+  or answers with no id gets a first flash, once the visitor confirms the erase (it wipes the board's
+  settings): the page asks `latest` without an id for a new one,
   downloads every file as that device, flashes, and sends the id with `beacon id`. A board with an id
   gets a normal update.
 
@@ -114,9 +123,11 @@ On a **public** project a device sends only `X-Beacon-Device` (no timestamp, no 
 unknown id is `401`. A device with no id yet calls `latest` without the header: Beacon creates a device
 named `unnamed` and returns its id as `device` in the reply. The device stores it (over USB: `beacon id
 <id>`) and sends it from then on; any other request without an id is `401`. At most 30 new ids per
-project per minute (`429` beyond).
+project per minute (`429` beyond); an id that is a week old and was never used again (one check, no
+download) is deleted.
 
-`GET /api/v1/firmware/{project}/latest?current=v1.2.3[&channel=beta]` (`beta` also offers prereleases):
+`GET /api/v1/firmware/{project}/latest?current=v1.2.3[&channel=beta]` (`beta` also offers prereleases;
+`current` is at most 64 characters, else `400`):
 
 ```json
 {
@@ -134,6 +145,10 @@ project per minute (`429` beyond).
   }
 }
 ```
+
+`sha256` is the cached file's, or before it is cached the digest GitHub reports for the asset (the
+download is then checked against it), so `latest` does not wait on GitHub; only an asset GitHub has no
+digest for (uploaded before mid-2025) is downloaded first. `md5` is `null` until the file is cached.
 
 `GET {url}` streams the asset with `Content-Length` and `x-md5`, which ESP32's `HTTPUpdate` checks
 before booting the image. Both calls record the device's last contact and version for the admin UI.
@@ -178,6 +193,15 @@ with at least one of those assets count as releases. The newest stable release i
 each sync, and each sync deletes the cached files of releases that are neither the newest (stable or
 beta) nor the version a device last reported; a device asking for one again gets it from GitHub.
 
+## Security headers
+
+Every response carries a Content-Security-Policy (the UI's files, the inline bootstrap SvelteKit
+writes into `index.html` by its SHA-256, Google Fonts, and the Clerk instance's frontend API, its
+images and Cloudflare's captcha), `frame-ancestors 'none'` with `X-Frame-Options: DENY`, HSTS,
+`nosniff` and a referrer policy. The hash is read from the build when the server starts, so restart
+it after rebuilding the UI. Set `CLERK_AUTHORIZED_PARTIES` to Beacon's origins so tokens Clerk issued
+to other apps on the same instance are refused.
+
 ## Run
 
 ```sh
@@ -187,11 +211,12 @@ make test   # every check CI runs
 make help   # the rest
 ```
 
-`make` loads `.env` itself, so it works from any shell, and falls back to `gh auth token` when
-`GITHUB_TOKEN` is unset. The UI is rebuilt only when `web/` changes; the server listens on `BIND`
+`make` loads `.env` itself, so it works from any shell. Private repos need `GITHUB_TOKEN` there: a
+fine-grained token with only "Contents: read" on them. The UI is rebuilt only when `web/` changes; the server listens on `BIND`
 (default http://localhost:8080/admin).
 
 Docker: `docker run -p 8080:8080 -v beacon:/data --env-file .env ghcr.io/jrg-tools/beacon`. The image is
-`scratch` plus a static binary and the UI. CI (`.github/workflows/docker-publish.yml`) runs fmt, clippy
-and tests for Rust, and lint, typecheck and build for the UI, then publishes to GHCR from `main` and `v*`
+`scratch` plus a static binary and the UI. CI (`.github/workflows/docker-publish.yml`, actions pinned by commit, base images by digest) runs fmt,
+clippy, tests and `cargo audit` (rustsec/audit-check) for Rust, and lint, typecheck, `node --test`
+(`web/test/flash.test.js`), `pnpm audit` and build for the UI, then publishes to GHCR from `main` and `v*`
 tags.

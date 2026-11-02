@@ -3,3 +3,11 @@ allowBuilds:
 peerDependencyRules:
   allowedVersions:
     svelte-clerk>@sveltejs/kit: '3'
+overrides:
+  # GHSA-g3hv-75wg-m249 (ReDoS) in eslint's minimatch 10.
+  minimatch: '>=11.0.1'
+auditConfig:
+  ignoreGhsas:
+    # deepmerge prototype poisoning: no patched release, and older ones have worse prototype
+    # pollution. Only vite-plugin-svelte uses it, on our own build config, at build time.
+    - GHSA-gcqx-w48m-w2h4

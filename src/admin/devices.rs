@@ -7,14 +7,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use std::collections::HashMap;
-
-use sqlx::SqlitePool;
-
-use super::projects::DAYS;
+use super::stats::{DAYS, UpdateStatus, updates};
 use crate::{
     error::{Result, status},
-    firmware::{parse_version, store, version},
+    firmware::{store, version},
     state::{AppState, now},
 };
 
@@ -34,48 +30,6 @@ pub struct DeviceRow {
     activity: Vec<i64>,
     #[sqlx(skip)]
     update: Option<UpdateStatus>,
-}
-
-#[derive(Serialize, Clone)]
-pub struct UpdateStatus {
-    pub tag: String,
-    /// When the device downloaded it.
-    at: i64,
-    /// `pending` until the device checks in again; then `succeeded` if it reports `tag`, else `failed`.
-    pub status: &'static str,
-}
-
-/// Each device's last download and what its next check said about it. Devices only report their
-/// version when they check, so a device that never checks again stays `pending`.
-pub async fn updates(
-    db: &SqlitePool,
-    project_id: i64,
-) -> sqlx::Result<HashMap<String, UpdateStatus>> {
-    let rows: Vec<(String, String, i64, Option<String>)> = sqlx::query_as(
-        "SELECT d.device_id, d.tag, d.at,
-           (SELECT c.version FROM device_events c
-            WHERE c.device_id = d.device_id AND c.kind = 'check' AND c.version IS NOT NULL
-              AND c.id > d.id
-            ORDER BY c.id LIMIT 1)
-         FROM device_events d
-         WHERE d.project_id = ? AND d.id = (
-           SELECT MAX(id) FROM device_events
-           WHERE device_id = d.device_id AND kind = 'download' AND tag IS NOT NULL)",
-    )
-    .bind(project_id)
-    .fetch_all(db)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|(device, tag, at, next)| {
-            let status = match next.as_deref().and_then(parse_version) {
-                None if next.is_none() => "pending",
-                Some(v) if Some(&v) == parse_version(&tag).as_ref() => "succeeded",
-                _ => "failed",
-            };
-            (device, UpdateStatus { tag, at, status })
-        })
-        .collect())
 }
 
 pub async fn list(
@@ -128,7 +82,7 @@ pub async fn create(
     Json(input): Json<DeviceInput>,
 ) -> Result<Json<Value>> {
     let name = valid_name(&input.name)?;
-    let id = format!("dev_{}", hex::encode(rand::random::<[u8; 8]>()));
+    let id = crate::device::new_id();
     let public_key = hex::decode(input.public_key.trim())
         .ok()
         .filter(|key| ParsedPublicKey::new(&ED25519, key).is_ok())

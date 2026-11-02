@@ -9,6 +9,7 @@ use super::version::pick_latest;
 #[derive(sqlx::FromRow, Clone)]
 pub struct ReleaseRow {
     pub id: i64,
+    pub project_id: i64,
     pub tag: String,
     pub prerelease: bool,
     pub notes: String,
@@ -19,12 +20,27 @@ pub struct ReleaseRow {
 pub struct AssetRow {
     #[serde(skip)]
     pub id: i64,
+    #[serde(skip)]
+    pub release_id: i64,
     pub name: String,
     #[serde(skip)]
     pub github_id: i64,
     pub size: i64,
     pub sha256: Option<String>,
     pub md5: Option<String>,
+    /// GitHub's SHA-256 of the file, known before it is cached (not for older uploads).
+    #[serde(skip)]
+    pub digest: Option<String>,
+}
+
+/// An asset query: every `AssetRow` column, then `$rest` (sqlx wants a literal).
+macro_rules! assets {
+    ($rest:literal) => {
+        concat!(
+            "SELECT a.id, a.release_id, a.name, a.github_id, a.size, a.sha256, a.md5, a.digest FROM assets a ",
+            $rest
+        )
+    };
 }
 
 /// The file names in a project's `first_flash` ("name@0xoffset,…").
@@ -37,10 +53,19 @@ pub fn first_flash_names(first_flash: &str) -> impl Iterator<Item = &str> {
 
 pub async fn releases(db: &SqlitePool, project_id: i64) -> sqlx::Result<Vec<ReleaseRow>> {
     sqlx::query_as(
-        "SELECT id, tag, prerelease, notes, published_at FROM releases
+        "SELECT id, project_id, tag, prerelease, notes, published_at FROM releases
          WHERE project_id = ? ORDER BY published_at DESC",
     )
     .bind(project_id)
+    .fetch_all(db)
+    .await
+}
+
+/// Every project's releases, for listing them all without a query per project.
+pub async fn all_releases(db: &SqlitePool) -> sqlx::Result<Vec<ReleaseRow>> {
+    sqlx::query_as(
+        "SELECT id, project_id, tag, prerelease, notes, published_at FROM releases ORDER BY published_at DESC",
+    )
     .fetch_all(db)
     .await
 }
@@ -54,21 +79,27 @@ pub async fn latest_release(
 }
 
 pub async fn release_assets(db: &SqlitePool, release_id: i64) -> sqlx::Result<Vec<AssetRow>> {
-    sqlx::query_as(
-        "SELECT a.id, a.name, a.github_id, a.size, a.sha256, a.md5 FROM assets a WHERE a.release_id = ? ORDER BY a.name",
-    )
-    .bind(release_id)
+    sqlx::query_as(assets!("WHERE a.release_id = ? ORDER BY a.name"))
+        .bind(release_id)
+        .fetch_all(db)
+        .await
+}
+
+/// Every asset of the project's releases in one query; pick a release's out by `release_id`.
+pub async fn project_assets(db: &SqlitePool, project_id: i64) -> sqlx::Result<Vec<AssetRow>> {
+    sqlx::query_as(assets!(
+        "JOIN releases r ON r.id = a.release_id WHERE r.project_id = ? ORDER BY a.name"
+    ))
+    .bind(project_id)
     .fetch_all(db)
     .await
 }
 
 pub async fn asset(db: &SqlitePool, id: i64) -> sqlx::Result<AssetRow> {
-    sqlx::query_as(
-        "SELECT a.id, a.name, a.github_id, a.size, a.sha256, a.md5 FROM assets a WHERE a.id = ?",
-    )
-    .bind(id)
-    .fetch_one(db)
-    .await
+    sqlx::query_as(assets!("WHERE a.id = ?"))
+        .bind(id)
+        .fetch_one(db)
+        .await
 }
 
 pub async fn find_asset(
@@ -77,10 +108,9 @@ pub async fn find_asset(
     tag: &str,
     name: &str,
 ) -> sqlx::Result<Option<AssetRow>> {
-    sqlx::query_as(
-        "SELECT a.id, a.name, a.github_id, a.size, a.sha256, a.md5 FROM assets a JOIN releases r ON r.id = a.release_id
-         WHERE r.project_id = ? AND r.tag = ? AND a.name = ?",
-    )
+    sqlx::query_as(assets!(
+        "JOIN releases r ON r.id = a.release_id WHERE r.project_id = ? AND r.tag = ? AND a.name = ?"
+    ))
     .bind(project_id)
     .bind(tag)
     .bind(name)

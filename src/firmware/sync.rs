@@ -48,13 +48,8 @@ pub async fn every(state: AppState, period: Duration) {
     let mut tick = tokio::time::interval(period);
     loop {
         tick.tick().await;
-        let old = now() - 90 * 86400;
-        if let Err(e) = sqlx::query("DELETE FROM device_events WHERE at < ?")
-            .bind(old)
-            .execute(&state.db)
-            .await
-        {
-            tracing::error!("pruning device events: {e}");
+        if let Err(e) = prune(&state).await {
+            tracing::error!("pruning: {e}");
         }
         match sqlx::query_as::<_, (i64,)>("SELECT id FROM projects")
             .fetch_all(&state.db)
@@ -68,6 +63,23 @@ pub async fn every(state: AppState, period: Duration) {
             Err(e) => tracing::error!("listing projects: {e}"),
         }
     }
+}
+
+/// Events older than 90 days, and public ids handed out a week ago and never used again
+/// (anyone can ask for one; a real board checks again or downloads).
+async fn prune(state: &AppState) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM device_events WHERE at < ?")
+        .bind(now() - 90 * 86400)
+        .execute(&state.db)
+        .await?;
+    sqlx::query(
+        "DELETE FROM devices WHERE public_key = '' AND name = 'unnamed' AND checks <= 1
+           AND downloads = 0 AND created_at < ?",
+    )
+    .bind(now() - 7 * 86400)
+    .execute(&state.db)
+    .await?;
+    Ok(())
 }
 
 async fn run(state: &AppState, project: &Project) -> anyhow::Result<()> {
@@ -139,16 +151,17 @@ async fn upsert_release(
     for asset in assets {
         // A re-uploaded asset has a new GitHub id: forget the old hashes.
         sqlx::query(
-            "INSERT INTO assets (release_id, name, github_id, size) VALUES (?, ?, ?, ?)
+            "INSERT INTO assets (release_id, name, github_id, size, digest) VALUES (?, ?, ?, ?, ?)
              ON CONFLICT (release_id, name) DO UPDATE SET
                sha256 = CASE WHEN github_id = excluded.github_id THEN sha256 END,
                md5 = CASE WHEN github_id = excluded.github_id THEN md5 END,
-               github_id = excluded.github_id, size = excluded.size",
+               github_id = excluded.github_id, size = excluded.size, digest = excluded.digest",
         )
         .bind(release_id)
         .bind(&asset.name)
         .bind(asset.id)
         .bind(asset.size)
+        .bind(asset.sha256())
         .execute(&mut **tx)
         .await?;
     }
@@ -161,4 +174,38 @@ async fn upsert_release(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{state::now, tests::setup};
+
+    #[tokio::test]
+    async fn prunes_ids_never_used_again() {
+        let (state, dir) = setup().await;
+        let old = now() - 8 * 86400;
+        for (id, checks, downloads) in [("dev_junk", 1, 0), ("dev_used", 1, 1), ("dev_back", 2, 0)]
+        {
+            sqlx::query(
+                "INSERT INTO devices (id, project_id, name, created_at, checks, downloads)
+                 VALUES (?, 2, 'unnamed', ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(old)
+            .bind(checks)
+            .bind(downloads)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        }
+        super::prune(&state).await.unwrap();
+        let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM devices ORDER BY id")
+            .fetch_all(&state.db)
+            .await
+            .unwrap();
+        let ids: Vec<_> = ids.into_iter().map(|(id,)| id).collect();
+        // dev_1 is a private device: it has a key.
+        assert_eq!(ids, ["dev_1", "dev_back", "dev_used"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

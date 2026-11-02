@@ -24,6 +24,15 @@ pub struct Asset {
     pub id: i64,
     pub name: String,
     pub size: i64,
+    /// `sha256:<hex>`; GitHub fills it for assets uploaded since mid-2025, older ones have none.
+    pub digest: Option<String>,
+}
+
+impl Asset {
+    /// The hex SHA-256 GitHub computed, if it did.
+    pub fn sha256(&self) -> Option<&str> {
+        self.digest.as_deref()?.strip_prefix("sha256:")
+    }
 }
 
 pub struct GitHub {
@@ -90,7 +99,7 @@ impl GitHub {
         part: &Path,
     ) -> anyhow::Result<(String, String)> {
         // GitHub redirects to a signed storage URL; reqwest drops the token on that hop.
-        let mut res = self
+        let res = self
             .get(
                 format!("{API}/repos/{repo}/releases/assets/{asset_id}"),
                 "application/octet-stream",
@@ -98,21 +107,48 @@ impl GitHub {
             .send()
             .await?
             .error_for_status()?;
-        let mut file = fs::File::create(part)
-            .await
-            .with_context(|| format!("creating {}", part.display()))?;
-        let (mut sha, mut md5, mut written) = (Sha256::new(), Md5::new(), 0i64);
-        while let Some(chunk) = res.chunk().await? {
-            sha.update(&chunk);
-            md5.update(&chunk);
-            written += chunk.len() as i64;
-            file.write_all(&chunk).await?;
-        }
-        file.sync_all().await?;
-        ensure!(
-            written == size,
-            "asset {asset_id}: got {written} bytes, expected {size}"
-        );
-        Ok((hex::encode(sha.finalize()), hex::encode(md5.finalize())))
+        save(res, size, part).await
+    }
+}
+
+/// Writes the body to `part`, refusing it as soon as it outgrows `size`, so a wrong or hostile
+/// response cannot fill the disk.
+async fn save(
+    mut res: reqwest::Response,
+    size: i64,
+    part: &Path,
+) -> anyhow::Result<(String, String)> {
+    let mut file = fs::File::create(part)
+        .await
+        .with_context(|| format!("creating {}", part.display()))?;
+    let (mut sha, mut md5, mut written) = (Sha256::new(), Md5::new(), 0i64);
+    while let Some(chunk) = res.chunk().await? {
+        written += chunk.len() as i64;
+        ensure!(written <= size, "got more than the expected {size} bytes");
+        sha.update(&chunk);
+        md5.update(&chunk);
+        file.write_all(&chunk).await?;
+    }
+    file.sync_all().await?;
+    ensure!(written == size, "got {written} bytes, expected {size}");
+    Ok((hex::encode(sha.finalize()), hex::encode(md5.finalize())))
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn save_stops_at_the_expected_size() {
+        let part = std::env::temp_dir().join(format!(
+            "beacon-save-{}.part",
+            hex::encode(rand::random::<[u8; 8]>())
+        ));
+        let res = |body: &'static [u8]| reqwest::Response::from(axum::http::Response::new(body));
+        assert!(super::save(res(b"0123456789"), 5, &part).await.is_err());
+        // Refused before anything was written.
+        assert_eq!(std::fs::metadata(&part).unwrap().len(), 0);
+        assert!(super::save(res(b"012"), 5, &part).await.is_err());
+        let (sha, _) = super::save(res(b"hello"), 5, &part).await.unwrap();
+        assert!(sha.starts_with("2cf24dba"));
+        std::fs::remove_file(part).unwrap();
     }
 }

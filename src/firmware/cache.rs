@@ -3,10 +3,19 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use anyhow::Context;
+use axum::{
+    body::Body,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
+};
 use tokio::fs;
+use tokio_util::io::ReaderStream;
 
 use super::{AssetRow, parse_version, store, version::pick_latest};
-use crate::state::AppState;
+use crate::{
+    error::{Result, status},
+    state::AppState,
+};
 
 pub fn path(state: &AppState, github_id: i64) -> PathBuf {
     state.cache_dir.join(format!("{github_id}.bin"))
@@ -38,10 +47,57 @@ pub async fn ensure(state: &AppState, repo: &str, asset: AssetRow) -> anyhow::Re
         )
         .await
         .with_context(|| format!("downloading {} from {repo}", asset.name))?;
+    if asset.digest.as_ref().is_some_and(|d| *d != sha256) {
+        let _ = fs::remove_file(path(state, asset.github_id)).await;
+        anyhow::bail!("{} from {repo} does not match GitHub's digest", asset.name);
+    }
     store::set_hashes(&state.db, asset.id, &sha256, &md5).await?;
     asset.sha256 = Some(sha256);
     asset.md5 = Some(md5);
     Ok(asset)
+}
+
+/// `ensure` for a handler: a failure is logged and the device gets a 502.
+pub async fn fetch(state: &AppState, repo: &str, asset: AssetRow) -> Result<AssetRow> {
+    ensure(state, repo, asset).await.map_err(|e| {
+        tracing::error!("{e:#}");
+        status(
+            StatusCode::BAD_GATEWAY,
+            "firmware not cached and GitHub unavailable",
+        )
+    })
+}
+
+/// The asset's file, fetched from GitHub first if it is not cached; for devices and the admin's
+/// first flash.
+pub async fn serve(state: &AppState, repo: &str, asset: AssetRow) -> Result<Response> {
+    let mut asset = fetch(state, repo, asset).await?;
+    let file = match fs::File::open(path(state, asset.github_id)).await {
+        // Evicted (`remove_unused`) between `ensure` and here: fetch it again, once.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            asset = fetch(state, repo, asset).await?;
+            fs::File::open(path(state, asset.github_id)).await?
+        }
+        file => file?,
+    };
+    let headers = [
+        (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+        (header::CONTENT_LENGTH, asset.size.to_string()),
+        (
+            header::ETAG,
+            format!("\"{}\"", asset.sha256.unwrap_or_default()),
+        ),
+        (
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", asset.name),
+        ),
+        // ESP32's HTTPUpdate checks the image against this header before booting it.
+        (
+            header::HeaderName::from_static("x-md5"),
+            asset.md5.unwrap_or_default(),
+        ),
+    ];
+    Ok((headers, Body::from_stream(ReaderStream::new(file))).into_response())
 }
 
 /// Deletes cached files no asset row points at any more.

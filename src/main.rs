@@ -41,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
         config.clerk_secret_key,
         config.clerk_publishable_key,
         config.clerk_scope,
+        config.clerk_authorized_parties,
     )?;
     let state = State::new(db, http, github, clerk, cache_dir, config.ui_dir);
 

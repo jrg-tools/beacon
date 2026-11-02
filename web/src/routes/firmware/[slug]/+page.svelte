@@ -2,18 +2,24 @@
 	import { beforeNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { useClerkContext } from 'svelte-clerk/client';
-	import { api, deviceGet as deviceRequest, projectReleases, register } from '#lib/api.ts';
+	import { ClerkProvider } from 'svelte-clerk/client';
+	import { ApiError, api, deviceGet, fetchConfig, projectReleases, register } from '#lib/api.ts';
+	import AdminSignIn from '#lib/components/AdminSignIn.svelte';
+	import ConnectHint from '#lib/components/ConnectHint.svelte';
 	import FlashProgress, { type Line } from '#lib/components/FlashProgress.svelte';
-	import { extras as parseExtras, firstFlashFiles, flash, partitions, place } from '#lib/flash.ts';
+	import { extras, firstFlashFiles, flash, partitions, place } from '#lib/flash.ts';
 	import { date, size } from '#lib/format.ts';
 	import { connect, hasSerial, reconnect } from '#lib/serial.ts';
 	import type { InstallProject, Project, Release } from '#lib/types.ts';
 
 	const slug = $derived(page.params.slug ?? '');
-	const clerk = useClerkContext();
 
 	let project = $state<InstallProject | null>(null);
+	// A 404: a private project (or none) for anyone but its admin. The board's signed `latest` then
+	// says which release it gets, so nothing about the project shows before the board proves itself.
+	let hidden = $state(false);
+	// The admin sign-in, loaded only once asked for: its Clerk key.
+	let signIn = $state<Promise<{ clerk_publishable_key: string }>>();
 	// Signed in as an admin: the project as the admin API has it, with every release file.
 	let admin = $state<{ project: Project; releases: Release[] } | null>(null);
 	// The 5 newest (the server sorts by date) and the current release, which may be older than them.
@@ -25,10 +31,10 @@
 	let tag = $state('');
 	let error = $state('');
 	// Bootloader, partition table…: a public project's are open, a private one's only its admin's.
-	const extras = $derived(parseExtras(admin?.project.first_flash ?? project?.first_flash ?? ''));
+	const flashExtras = $derived(extras(admin?.project.first_flash ?? project?.first_flash ?? ''));
 	// Private projects only: a public one detects a board that needs it.
 	let erase = $state(false);
-	const canErase = $derived(!!admin && !project?.public && extras.length > 0);
+	const canErase = $derived(!!admin && !project?.public && flashExtras.length > 0);
 
 	const STEPS = ['Verify device', 'Download', 'Flash', 'Restart', 'Check boot'];
 	const FIRST_STEPS = [
@@ -46,25 +52,46 @@
 	let running = $state(false);
 	let done = $state('');
 	let logs = $state<Line[]>([]);
+	// The browser's port picker is open.
+	let picking = $state(false);
+	// The release going on, once known: a private project's page learns it from the board.
+	let installing = $state('');
+	// ConnectHint following the run: the port popup, verifying, installing, done.
+	const live = $derived(
+		step < 0
+			? null
+			: {
+					scene: picking ? 1 : step >= steps.length ? 4 : step === 0 ? 2 : 3,
+					progress,
+					failed: !!error && !running,
+					tag: installing
+				}
+	);
 
 	const release = $derived(releases.find((r) => r.tag === tag));
 
-	onMount(async () => {
+	async function load() {
 		try {
 			project = await projectReleases(slug);
+			hidden = false;
 			tag = project.latest ?? project.releases[0]?.tag ?? '';
 		} catch (err) {
-			error = (err as Error).message;
+			if (err instanceof ApiError && err.status === 404) hidden = true;
+			else error = (err as Error).message;
 		}
+	}
+
+	onMount(() => {
+		load();
+		// Coming from the admin pages, Clerk is already loaded and signed in.
+		if (window.Clerk?.session) signIn = fetchConfig();
 	});
 
-	$effect(() => {
-		if (!clerk.isLoaded || !clerk.session || admin) return;
-		(async () => {
-			const found = (await api.projects()).find((p) => p.slug === slug);
-			if (found) admin = { project: found, releases: await api.releases(found.id) };
-		})().catch(() => {}); // not an admin: the public view
-	});
+	// Signed in as this project's admin: the full page, the private project's included.
+	async function onadmin(found: NonNullable<typeof admin>) {
+		admin = found;
+		if (!project) await load(); // now with the admin's session
+	}
 
 	function log(text: string, kind?: Line['kind']) {
 		for (const line of text.split('\n').filter((l) => l.trim()))
@@ -91,9 +118,9 @@
 
 	// The device API, as if the board called it. Private: it signs the request over USB with its key,
 	// and the server refuses a board that is not a registered device of this project. Public: its id.
-	async function deviceGet(id: string, path: string) {
+	async function boardGet(id: string, path: string) {
 		if (project?.public)
-			return deviceRequest(path, { device: id }).catch((err) => {
+			return deviceGet(path, { device: id }).catch((err) => {
 				if (err.status === 401) throw new Error(`Beacon does not know ${id}.`);
 				throw err;
 			});
@@ -101,7 +128,7 @@
 		const request = `${timestamp} GET ${path}`;
 		const signature = await board!.ask(`beacon sign ${request}`, `beacon:sig ${request} `, 5000);
 		if (signature === 'none') throw new Error(NOT_REGISTERED);
-		return deviceRequest(path, { device: id, timestamp, signature }).catch((err) => {
+		return deviceGet(path, { device: id, timestamp, signature }).catch((err) => {
 			if (err.status === 401) throw new Error(NOT_REGISTERED);
 			throw err;
 		});
@@ -109,7 +136,7 @@
 
 	// Also how Beacon learns the version: the same check the board makes over WiFi.
 	const check = (id: string, version: string) =>
-		deviceGet(id, `/api/v1/firmware/${slug}/latest?current=${encodeURIComponent(version)}`);
+		boardGet(id, `/api/v1/firmware/${slug}/latest?current=${encodeURIComponent(version)}`);
 
 	const sameVersion = (a: string, b: string) => a.replace(/^v/, '') === b.replace(/^v/, '');
 
@@ -118,11 +145,24 @@
 		if (fraction >= 1) step = 3;
 	};
 
+	type Target = { tag: string; assets: { name: string; size: number }[] };
+
 	// Verified before anything is written, and again once the new firmware has booted. NVS stays.
-	async function update(rel: NonNullable<typeof release>, before: { id: string; version: string }) {
+	// Without `rel` (a private project's page for a non-admin), the release is whatever the board's
+	// own `latest` offers it.
+	async function update(rel: Target | undefined, before: { id: string; version: string }) {
 		if (before.id === 'none') throw new Error(NOT_REGISTERED);
-		await check(before.id, before.version);
+		const latest = await (await check(before.id, before.version)).json();
 		log(`Your device is verified (${before.id}), on ${before.version}.`, 'ok');
+		if (!rel) {
+			if (!latest.update_available) {
+				done = `Your device is on ${before.version}: no newer release.`;
+				return;
+			}
+			rel = latest.latest as Target;
+			log(`Its newest release is ${rel.tag}.`);
+		}
+		installing = rel.tag;
 		const table = partitions(await board!.ask('beacon partitions', 'beacon:partitions ', 5000));
 		if (!table.length) throw new Error('The device reported no partitions.');
 		for (const p of table)
@@ -132,9 +172,9 @@
 		step = 1;
 		const assets = [];
 		for (const asset of rel.assets) {
-			if (extras.some((e) => e.name === asset.name)) continue;
+			if (flashExtras.some((e) => e.name === asset.name)) continue;
 			log(`Downloading ${asset.name} (${size(asset.size)})…`);
-			const res = await deviceGet(before.id, assetPath(rel.tag, asset.name));
+			const res = await boardGet(before.id, assetPath(rel.tag, asset.name));
 			assets.push({ name: asset.name, data: new Uint8Array(await res.arrayBuffer()) });
 		}
 		const port = board!.port;
@@ -174,7 +214,7 @@
 		let id = '';
 		if (project?.public) {
 			// Its first check, made for it: the id carries the downloads and is written once it boots.
-			const res = await deviceRequest(`/api/v1/firmware/${slug}/latest`, {});
+			const res = await deviceGet(`/api/v1/firmware/${slug}/latest`, {});
 			id = (await res.json()).device;
 			log(`Beacon gave the device the id ${id}.`);
 		}
@@ -185,11 +225,11 @@
 				admin && !project?.public
 					? await api.download(admin.project.id, rel.tag, asset.name)
 					: new Uint8Array(
-							await (await deviceGet(id, assetPath(rel.tag, asset.name))).arrayBuffer()
+							await (await boardGet(id, assetPath(rel.tag, asset.name))).arrayBuffer()
 						);
 			downloaded.push({ name: asset.name, data });
 		}
-		const { files, table, skipped } = firstFlashFiles(extras, downloaded, rel.tag);
+		const { files, table, skipped } = firstFlashFiles(flashExtras, downloaded, rel.tag);
 		for (const p of table)
 			log(`Partition ${p.label} at 0x${p.offset.toString(16)} (${size(p.size)})`);
 		for (const name of skipped) log(`Skipping ${name}: not an app or filesystem image.`);
@@ -225,35 +265,41 @@
 	}
 
 	async function install() {
-		if (!project || !release) return;
+		if (!hidden && (!project || !release)) return;
 		error = '';
 		logs = [];
 		done = '';
 		progress = 0;
 		steps = STEPS;
 		running = true;
+		installing = '';
 		step = 0;
 		try {
 			// First, while the click still allows the port picker.
+			picking = true;
 			board = await connect();
-			if (canErase && erase) await firstFlash(release);
+			picking = false;
+			if (canErase && erase) await firstFlash(release!);
 			else {
 				log('Port open, asking the device who it is…');
 				// A public project's board that doesn't answer runs no (or foreign) firmware.
 				const before = await info(
-					project.public ? 10000 : 15000,
+					project?.public ? 10000 : 15000,
 					'The device did not answer "beacon info": its firmware predates installs from here, so update it over the air or with PlatformIO once.'
 				).catch((err) => {
 					if (project?.public) return { id: 'none', version: '' };
 					throw err;
 				});
-				if (project.public && before.id === 'none') {
+				if (project?.public && before.id === 'none') {
 					log(
 						before.version
 							? 'The device has no id yet: first flash.'
 							: 'No answer to "beacon info" (a blank board or other firmware): first flash.'
 					);
-					await firstFlash(release);
+					// Anyone's board may be plugged in: never wipe it without asking.
+					if ((await ask(eraseDialog!)) !== 'erase')
+						throw new Error('Cancelled: the board was not touched.');
+					await firstFlash(release!);
 				} else await update(release, before);
 			}
 			step = steps.length;
@@ -265,6 +311,7 @@
 				log(error, 'error');
 			}
 		} finally {
+			picking = false;
 			await board?.close();
 			board = undefined;
 			running = false;
@@ -274,14 +321,22 @@
 	// A first flash's last step on a private project: Sync device's name, asked in the page.
 	let dialog = $state<HTMLDialogElement>();
 	let deviceName = $state('');
-	let named: ((name: string) => void) | undefined;
+	// A public project's first flash erases the board: confirmed first.
+	let eraseDialog = $state<HTMLDialogElement>();
+
+	// Opens `d`; its form's submit button value once it closes ('' if dismissed).
+	function ask(d: HTMLDialogElement) {
+		d.returnValue = '';
+		d.showModal();
+		return new Promise<string>((resolve) =>
+			d.addEventListener('close', () => resolve(d.returnValue), { once: true })
+		);
+	}
 
 	// The name typed, or '' if the dialog was dismissed.
-	function askName() {
+	async function askName() {
 		deviceName = '';
-		dialog!.returnValue = '';
-		dialog!.showModal();
-		return new Promise<string>((resolve) => (named = resolve));
+		return (await ask(dialog!)) === 'register' ? deviceName.trim() : '';
 	}
 
 	// Leaving mid-flash would leave half an app on the board.
@@ -297,16 +352,36 @@
 	<div class="space-y-3">
 		<header class="flex items-center gap-4">
 			<span
-				class="grid size-14 shrink-0 place-items-center rounded-lg bg-amber-100 text-3xl dark:bg-amber-500/15"
-				aria-hidden="true">{project?.emoji ?? '📦'}</span
+				class="grid size-14 shrink-0 place-items-center rounded-lg border border-zinc-200 bg-zinc-50 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400"
+				aria-hidden="true"
 			>
+				<svg
+					viewBox="0 0 24 24"
+					class="size-7"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="1.5"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
+					<rect x="6" y="6" width="12" height="12" rx="2" />
+					<rect x="9.5" y="9.5" width="5" height="5" rx="0.5" />
+					<path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" />
+				</svg>
+			</span>
 			<div class="min-w-0">
-				<h1 class="truncate text-xl font-semibold">Install firmware</h1>
-				<p class="text-xs text-zinc-400 sm:truncate">
-					{#if project?.public}
-						Over USB, onto any {project.name} board; a blank one is flashed from scratch.
+				<h1 class="truncate text-xl font-semibold">
+					{hidden ? 'Update your device' : `Install ${project?.name ?? 'firmware'}`}
+				</h1>
+				<p class="text-sm text-zinc-500 dark:text-zinc-400">
+					{#if hidden}
+						Connect it with a USB cable to install the latest release. Your settings are kept.
+					{:else if project?.public}
+						Connect your board with a USB cable to install the latest firmware. Blank boards work
+						too.
 					{:else}
-						Over USB, onto a registered {project?.name ?? ''} device. Its settings and key stay.
+						Connect your registered device with a USB cable to install the latest release. Your
+						settings are kept.
 					{/if}
 				</p>
 			</div>
@@ -321,37 +396,43 @@
 	{#if error && step < 0}
 		<p class="text-sm font-semibold text-red-600" role="alert">{error}</p>
 	{/if}
+	{#if hidden && !admin}
+		<ConnectHint {live} />
+	{/if}
 
 	<section class="space-y-4">
-		<label class="block space-y-2">
-			<span class="text-sm font-semibold text-zinc-500 uppercase">Version</span>
-			<select bind:value={tag} disabled={running || !releases.length} class="field">
-				{#each releases as r (r.tag)}
-					<option value={r.tag}
-						>{r.tag}{r.prerelease ? ' (prerelease)' : ''}{r.tag === project?.latest
-							? ' (latest)'
-							: ''} · {date(r.published_at)}</option
-					>
-				{:else}
-					<option value="">No releases yet</option>
-				{/each}
-			</select>
-		</label>
-		{#if release}
-			<ul class="space-y-1">
-				{#each release.assets as asset (asset.name)}
-					{@const extra = extras.find((e) => e.name === asset.name)}
-					<li class="flex items-center gap-1.5 text-xs text-zinc-500">
-						<span class="size-1.5 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600"></span>
-						<span class="truncate font-medium text-zinc-700 dark:text-zinc-300">{asset.name}</span>
-						<span class="shrink-0"
-							>· {size(asset.size)}{extra
-								? ` · first flash at 0x${extra.address.toString(16)}`
-								: ''}</span
+		{#if !hidden}
+			<label class="block space-y-2">
+				<span class="text-sm font-semibold text-zinc-500 uppercase">Version</span>
+				<select bind:value={tag} disabled={running || !releases.length} class="field">
+					{#each releases as r (r.tag)}
+						<option value={r.tag}
+							>{r.tag}{r.prerelease ? ' (prerelease)' : ''}{r.tag === project?.latest
+								? ' (latest)'
+								: ''} · {date(r.published_at)}</option
 						>
-					</li>
-				{/each}
-			</ul>
+					{:else}
+						<option value="">No releases yet</option>
+					{/each}
+				</select>
+			</label>
+			{#if release}
+				<ul class="space-y-1">
+					{#each release.assets as asset (asset.name)}
+						{@const extra = flashExtras.find((e) => e.name === asset.name)}
+						<li class="flex items-center gap-1.5 text-xs text-zinc-500">
+							<span class="size-1.5 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600"></span>
+							<span class="truncate font-medium text-zinc-700 dark:text-zinc-300">{asset.name}</span
+							>
+							<span class="shrink-0"
+								>· {size(asset.size)}{extra
+									? ` · first flash at 0x${extra.address.toString(16)}`
+									: ''}</span
+							>
+						</li>
+					{/each}
+				</ul>
+			{/if}
 		{/if}
 		{#if canErase}
 			<label class="flex items-start gap-3">
@@ -372,14 +453,34 @@
 		{/if}
 		<button
 			onclick={install}
-			disabled={running || !release || !hasSerial()}
+			disabled={running || (!hidden && !release) || !hasSerial()}
 			class="w-full cursor-pointer rounded-lg bg-yellow-400 px-5 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
 			>{running
 				? 'Installing…'
-				: canErase && erase
-					? `Connect, erase and flash ${tag}`
-					: `Connect and install ${tag}`}</button
+				: hidden
+					? 'Connect and update'
+					: canErase && erase
+						? `Connect, erase and flash ${tag}`
+						: `Connect and install ${tag}`}</button
 		>
+		{#if (hidden || project?.public === false) && !admin}
+			{#if signIn}
+				{#await signIn then { clerk_publishable_key }}
+					<ClerkProvider publishableKey={clerk_publishable_key}>
+						<AdminSignIn {slug} {onadmin} />
+					</ClerkProvider>
+				{:catch err}
+					<p class="text-sm font-semibold text-red-600" role="alert">{err.message}</p>
+				{/await}
+			{:else}
+				<button
+					onclick={() => (signIn = fetchConfig())}
+					disabled={running}
+					class="cursor-pointer text-xs font-semibold text-zinc-500 underline-offset-2 hover:underline disabled:cursor-not-allowed"
+					>Admin sign-in (versions and first flash)</button
+				>
+			{/if}
+		{/if}
 	</section>
 
 	{#if step >= 0}
@@ -389,7 +490,6 @@
 
 <dialog
 	bind:this={dialog}
-	onclose={() => named?.(dialog?.returnValue === 'register' ? deviceName.trim() : '')}
 	class="m-auto w-[calc(100%-2rem)] max-w-md rounded-lg border border-zinc-200 bg-white text-black shadow-xl backdrop:bg-zinc-950/60 backdrop:backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900 dark:text-white"
 	aria-labelledby="name-title"
 >
@@ -412,6 +512,34 @@
 				value="register"
 				class="cursor-pointer rounded-lg bg-yellow-400 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-yellow-300"
 				>Register</button
+			>
+		</div>
+	</form>
+</dialog>
+
+<dialog
+	bind:this={eraseDialog}
+	class="m-auto w-[calc(100%-2rem)] max-w-md rounded-lg border border-zinc-200 bg-white text-black shadow-xl backdrop:bg-zinc-950/60 backdrop:backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900 dark:text-white"
+	aria-labelledby="erase-title"
+>
+	<form method="dialog" class="space-y-4 p-6">
+		<div class="space-y-1">
+			<h2 id="erase-title" class="text-lg font-semibold">Erase this board?</h2>
+			<p class="text-xs text-zinc-500">
+				It did not answer as a {project?.name ?? ''} device with an id, so installing means a first flash:
+				everything on it is erased, its WiFi and other settings included, then {tag} is written.
+			</p>
+		</div>
+		<div class="flex justify-end gap-3">
+			<button
+				value=""
+				class="cursor-pointer rounded-lg px-5 py-2.5 text-sm font-semibold text-zinc-500 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
+				>Cancel</button
+			>
+			<button
+				value="erase"
+				class="cursor-pointer rounded-lg bg-yellow-400 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-yellow-300"
+				>Erase and flash</button
 			>
 		</div>
 	</form>

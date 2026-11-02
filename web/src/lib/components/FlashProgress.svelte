@@ -58,9 +58,26 @@
 							class="size-3 shrink-0 animate-spin rounded-full border-2 border-yellow-400 border-t-transparent"
 						></span>
 					{:else if state === 'done'}
-						<span class="text-emerald-500">✓</span>
+						<svg
+							viewBox="0 0 12 12"
+							class="size-3 shrink-0 text-emerald-500"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"><path d="M2 6.5 5 9.5 10 3" /></svg
+						>
 					{:else if state === 'failed'}
-						<span class="text-red-500">✕</span>
+						<svg
+							viewBox="0 0 12 12"
+							class="size-3 shrink-0 text-red-500"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" /></svg
+						>
 					{/if}
 					<span class="min-w-0 leading-tight sm:truncate">{label}</span>
 				</p>

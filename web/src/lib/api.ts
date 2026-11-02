@@ -57,6 +57,9 @@ export async function fetchConfig(): Promise<{ clerk_publishable_key: string }> 
 
 export const api = {
 	projects: () => request<Project[]>('/projects'),
+	/** One project by slug, or null. */
+	project: (slug: string) =>
+		request<Project[]>(`/projects?slug=${encodeURIComponent(slug)}`).then(([p]) => p ?? null),
 	createProject: (p: ProjectInput) => request<{ id: number }>('/projects', send('POST', p)),
 	updateProject: (id: number, p: ProjectInput) => request<null>(`/projects/${id}`, send('PUT', p)),
 	deleteProject: (id: number) => request<null>(`/projects/${id}`, send('DELETE')),
@@ -79,7 +82,7 @@ export const api = {
 	deleteDevice: (id: string) => request<null>(`/devices/${id}`, send('DELETE'))
 };
 
-/** The install page's version picker: public, no files (src/install.rs). */
+/** The install page's version picker, no files (src/install.rs): a private project's is a 404 but for its admin. */
 export const projectReleases = (slug: string) => json<InstallProject>(`/api/v1/install/${slug}`);
 
 /**

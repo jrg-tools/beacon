@@ -1,11 +1,9 @@
-use std::collections::BTreeMap;
-
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::project_input::ProjectInput;
@@ -43,19 +41,30 @@ pub struct ProjectRow {
     latest: Option<String>,
 }
 
-pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<ProjectRow>>> {
+#[derive(Deserialize)]
+pub struct ListQuery {
+    /// Only this project (the project and install pages open one by slug).
+    slug: Option<String>,
+}
+
+pub async fn list(
+    State(state): State<AppState>,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<Vec<ProjectRow>>> {
     let mut rows: Vec<ProjectRow> = sqlx::query_as(
         "SELECT p.id, p.slug, p.name, p.emoji, p.repo, p.assets, p.first_flash, p.public, p.synced_at, p.sync_error,
            (SELECT COUNT(*) FROM releases WHERE project_id = p.id) AS releases,
            (SELECT COUNT(*) FROM devices WHERE project_id = p.id) AS devices
-         FROM projects p ORDER BY p.name",
+         FROM projects p WHERE p.slug = COALESCE(?, p.slug) ORDER BY p.name",
     )
+    .bind(q.slug)
     .fetch_all(&state.db)
     .await?;
+    // One query for every project's releases; the newest is picked by semver, not in SQL.
+    let releases = store::all_releases(&state.db).await?;
     for row in &mut rows {
-        row.latest = store::latest_release(&state.db, row.id, false)
-            .await?
-            .map(|(_, r)| r.tag);
+        let own = releases.iter().filter(|r| r.project_id == row.id).cloned();
+        row.latest = version::pick_latest(own.collect(), false).map(|(_, r)| r.tag);
     }
     Ok(Json(rows))
 }
@@ -141,7 +150,7 @@ pub async fn download(
     let asset = store::find_asset(&state.db, id, &tag, &name)
         .await?
         .ok_or(status(StatusCode::NOT_FOUND, "no such asset"))?;
-    crate::device::serve(&state, &repo, asset).await
+    cache::serve(&state, &repo, asset).await
 }
 
 pub async fn releases(
@@ -159,11 +168,12 @@ pub async fn releases(
         .filter_map(|(v, _)| v.as_deref().and_then(parse_version))
         .collect();
     // Only current devices: a revoked one would stay pending forever.
-    let mut updates = super::devices::updates(&state.db, id).await?;
+    let mut updates = super::stats::updates(&state.db, id).await?;
     updates.retain(|device, _| devices.iter().any(|d| &d.1 == device));
+    let all_assets = store::project_assets(&state.db, id).await?;
     let mut out = Vec::new();
     for r in store::releases(&state.db, id).await? {
-        let assets = store::release_assets(&state.db, r.id).await?;
+        let assets: Vec<_> = all_assets.iter().filter(|a| a.release_id == r.id).collect();
         let version = parse_version(&r.tag);
         let devices = installed
             .iter()
@@ -176,99 +186,4 @@ pub async fn releases(
         out.push(json!({ "tag": r.tag, "prerelease": r.prerelease, "published_at": r.published_at, "devices": devices, "pending": pending, "assets": assets }));
     }
     Ok(Json(out))
-}
-
-/// How many days of history the project page charts.
-pub const DAYS: i64 = 30;
-
-/// A device's last version, last seen, checks, downloads and id.
-type DeviceTotals = (Option<String>, Option<i64>, i64, i64, String);
-
-/// Fleet numbers and daily series for one project's page.
-pub async fn stats(State(state): State<AppState>, Path(id): Path<i64>) -> Result<Json<Value>> {
-    let devices: Vec<DeviceTotals> = sqlx::query_as(
-        "SELECT last_version, last_seen, checks, downloads, id FROM devices WHERE project_id = ?",
-    )
-    .bind(id)
-    .fetch_all(&state.db)
-    .await?;
-    let latest = store::latest_release(&state.db, id, false).await?;
-    let t = now();
-    let today = t / 86400;
-    let since = (today - DAYS + 1) * 86400;
-    let seen_since = |secs: i64| {
-        devices
-            .iter()
-            .filter(|d| d.1.is_some_and(|at| at > t - secs))
-            .count()
-    };
-    let mut versions = BTreeMap::<&str, i64>::new();
-    for (v, ..) in &devices {
-        *versions
-            .entry(v.as_deref().unwrap_or("unknown"))
-            .or_default() += 1;
-    }
-
-    // Days are UTC, as unix day numbers; the page turns them into dates.
-    let rows: Vec<(i64, i64, i64, i64, i64)> = sqlx::query_as(
-        "SELECT at / 86400 AS day, SUM(kind = 'check'), SUM(kind = 'download'),
-           COALESCE(SUM(bytes), 0), COUNT(DISTINCT device_id)
-         FROM device_events WHERE project_id = ? AND at >= ? GROUP BY day",
-    )
-    .bind(id)
-    .bind(since)
-    .fetch_all(&state.db)
-    .await?;
-    let days: Vec<Value> = (today - DAYS + 1..=today)
-        .map(|day| {
-            let r = rows.iter().find(|r| r.0 == day).copied();
-            let (_, checks, downloads, bytes, active) = r.unwrap_or((day, 0, 0, 0, 0));
-            json!({ "day": day, "checks": checks, "downloads": downloads, "bytes": bytes, "active": active })
-        })
-        .collect();
-    let channels: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT channel, COUNT(DISTINCT device_id) FROM device_events
-         WHERE project_id = ? AND kind = 'check' AND at >= ? GROUP BY channel",
-    )
-    .bind(id)
-    .bind(since)
-    .fetch_all(&state.db)
-    .await?;
-    // An update is a device reporting a different version than on its previous check.
-    let (updated,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM (
-           SELECT at, version, LAG(version) OVER (PARTITION BY device_id ORDER BY at, id) AS prev
-           FROM device_events WHERE project_id = ? AND kind = 'check' AND version IS NOT NULL
-         ) WHERE prev IS NOT NULL AND version != prev AND at >= ?",
-    )
-    .bind(id)
-    .bind(since)
-    .fetch_one(&state.db)
-    .await?;
-
-    let updates = super::devices::updates(&state.db, id).await?;
-    let in_state = |status: &str| {
-        devices
-            .iter()
-            .filter(|d| updates.get(&d.4).is_some_and(|u| u.status == status))
-            .count()
-    };
-
-    Ok(Json(json!({
-        "devices": devices.len(),
-        "active_24h": seen_since(86400),
-        "active_7d": seen_since(7 * 86400),
-        "up_to_date": latest.as_ref().map_or(0, |(l, _)| {
-            devices.iter().filter(|d| !version::update_available(l, d.0.as_deref())).count()
-        }),
-        "latest": latest.map(|(_, r)| r.tag),
-        "checks": devices.iter().map(|d| d.2).sum::<i64>(),
-        "downloads": devices.iter().map(|d| d.3).sum::<i64>(),
-        "updates": updated,
-        "updates_pending": in_state("pending"),
-        "updates_failed": in_state("failed"),
-        "channels": channels.into_iter().collect::<BTreeMap<_, _>>(),
-        "versions": versions,
-        "days": days,
-    })))
 }
