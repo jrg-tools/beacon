@@ -249,7 +249,7 @@
 		board = await reconnect(port);
 		const after = await info(
 			30000,
-			'The device came back on USB but did not answer: the new firmware may not boot. Boot the previous app from Recovery tools, or check its serial log.'
+			'The device came back on USB but did not answer: the new firmware may not boot. Boot the previous app from the Advanced menu, or check its serial log.'
 		);
 		if (after.id !== before.id)
 			throw new Error(`A different device answered after the restart (${after.id}).`);
@@ -428,6 +428,7 @@
 	// The backup `restoreBackup` writes, picked first: a file picker's choice is not a click the port
 	// picker accepts.
 	let backupFile = $state<File | null>(null);
+	let toolsDialog = $state<HTMLDialogElement>();
 
 	function restoreBackup() {
 		const file = backupFile;
@@ -493,7 +494,34 @@
 		<p class="text-sm font-semibold text-red-600" role="alert">{error}</p>
 	{/if}
 	<!-- The board signs for a private project, an admin's update included; a public one's just answers. -->
-	<ConnectHint {live} signed={project?.public !== true} />
+	<div class="relative">
+		<ConnectHint {live} signed={project?.public !== true} />
+		<button
+			onclick={() => toolsDialog?.showModal()}
+			class="absolute top-3 right-3 cursor-pointer rounded-lg p-2 text-zinc-400 transition hover:bg-zinc-200/60 hover:text-zinc-700 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-200"
+			title="Advanced"
+			aria-label="Advanced"
+		>
+			<svg
+				viewBox="0 0 24 24"
+				class="size-5"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				stroke-linecap="round"
+				aria-hidden="true"
+				><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1" /><circle
+					cx="15"
+					cy="6"
+					r="2"
+				/><circle cx="9" cy="12" r="2" /><circle cx="17" cy="18" r="2" /></svg
+			>
+			<!-- First flash is on: the drawer holds a setting the install button uses. -->
+			{#if canErase && erase}
+				<span class="absolute top-1.5 right-1.5 size-2 rounded-full bg-yellow-400"></span>
+			{/if}
+		</button>
+	</div>
 
 	<section class="space-y-4">
 		{#if !hidden}
@@ -511,56 +539,6 @@
 					{/each}
 				</select>
 			</label>
-			{#if release}
-				<ul class="space-y-1">
-					{#each release.assets as asset (asset.name)}
-						{@const extra = flashExtras.find((e) => e.name === asset.name)}
-						<li class="flex items-center gap-1.5 text-xs text-zinc-500">
-							<span class="size-1.5 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600"></span>
-							<span class="truncate font-medium text-zinc-700 dark:text-zinc-300">{asset.name}</span
-							>
-							<span class="shrink-0"
-								>· {size(asset.size)}{extra
-									? ` · first flash at 0x${extra.address.toString(16)}`
-									: ''}</span
-							>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-		{/if}
-		{#if canErase}
-			<label class="flex items-start gap-3">
-				<input
-					type="checkbox"
-					bind:checked={erase}
-					disabled={running}
-					class="mt-1 size-4 accent-yellow-400"
-				/>
-				<span class="space-y-0.5">
-					<span class="block text-sm font-semibold">First flash (erase everything)</span>
-					<span class="block text-xs text-zinc-500">
-						For a blank or bricked board: writes the bootloader and partition table too, then
-						registers it. Unchecked: update firmware, keeping its settings and key.
-					</span>
-				</span>
-			</label>
-			{#if erase}
-				<label class="ml-7 flex items-start gap-3">
-					<input
-						type="checkbox"
-						bind:checked={keep}
-						disabled={running}
-						class="mt-1 size-4 accent-yellow-400"
-					/>
-					<span class="space-y-0.5">
-						<span class="block text-sm font-semibold">Keep settings (repair)</span>
-						<span class="block text-xs text-zinc-500">
-							Rewrites the bootloader, table and app without erasing NVS: WiFi, key and id stay.
-						</span>
-					</span>
-				</label>
-			{/if}
 		{/if}
 		<button
 			onclick={install}
@@ -588,49 +566,148 @@
 	{#if step >= 0}
 		<FlashProgress {steps} {step} {flashStep} {progress} {running} {error} {logs} {done} />
 	{/if}
-
-	<details class="space-y-4 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-		<summary class="cursor-pointer text-sm font-semibold">Recovery tools</summary>
-		<p class="text-xs text-zinc-500">
-			These talk to the board's bootloader, so they work whatever it runs, or if it runs nothing.
-		</p>
-		<div class="grid gap-3 sm:grid-cols-2">
-			<button
-				onclick={saveBackup}
-				disabled={running || !hasSerial()}
-				class="cursor-pointer rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-semibold transition hover:bg-zinc-200/60 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:hover:bg-zinc-800/60"
-				title="Reads the whole flash into a file: minutes for 16 MB">Back up the whole flash</button
-			>
-			<button
-				onclick={bootPreviousApp}
-				disabled={running || !hasSerial()}
-				class="cursor-pointer rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-semibold transition hover:bg-zinc-200/60 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:hover:bg-zinc-800/60"
-				title="Boots the app the last install replaced, still in the other slot"
-				>Boot the previous app</button
-			>
-		</div>
-		<div class="flex flex-wrap items-center gap-3">
-			<input
-				type="file"
-				accept=".bin,application/octet-stream"
-				disabled={running}
-				onchange={(e) => (backupFile = e.currentTarget.files?.[0] ?? null)}
-				class="min-w-0 flex-1 text-xs text-zinc-500 file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-zinc-200 file:px-3 file:py-2 file:text-xs file:font-semibold dark:file:bg-zinc-800"
-				aria-label="Backup file to restore"
-			/>
-			<button
-				onclick={restoreBackup}
-				disabled={running || !backupFile || !hasSerial()}
-				class="cursor-pointer rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-semibold transition hover:bg-zinc-200/60 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:hover:bg-zinc-800/60"
-				>Restore backup</button
-			>
-		</div>
-		<p class="text-xs text-zinc-500">
-			A backup holds everything on the board, its WiFi password and Beacon key included. A restore
-			writes it back whole, once its size, bootloader and partition table check out for this board.
-		</p>
-	</details>
 </div>
+
+<!-- Advanced: a drawer from the right. A click on the backdrop (the dialog itself) closes it;
+	a tool closes it too, so the run's progress shows on the page. -->
+<dialog
+	bind:this={toolsDialog}
+	onclick={(e) => e.target === toolsDialog && toolsDialog.close()}
+	class="drawer m-0 ml-auto h-dvh max-h-none w-full max-w-sm border-l border-zinc-200 bg-white text-black shadow-xl backdrop:bg-zinc-950/40 backdrop:backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900 dark:text-white"
+	aria-labelledby="tools-title"
+>
+	<div class="flex h-full flex-col gap-6 p-6">
+		<div class="flex items-start justify-between gap-3">
+			<h2 id="tools-title" class="text-lg font-semibold">Advanced</h2>
+			<button
+				onclick={() => toolsDialog?.close()}
+				class="-m-1 cursor-pointer rounded-lg p-1 text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-700 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-200"
+				aria-label="Close"
+				><svg
+					viewBox="0 0 24 24"
+					class="size-5"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg
+				></button
+			>
+		</div>
+		{#if canErase}
+			<section class="space-y-1">
+				<h3 class="text-xs font-semibold text-zinc-500 uppercase">Installation</h3>
+				<label class="flex cursor-pointer items-start justify-between gap-4 py-3">
+					<span class="space-y-0.5">
+						<span class="block text-sm font-semibold">First flash</span>
+						<span class="block text-xs text-zinc-500"
+							>Erases everything and writes the bootloader and partition table too, then registers
+							the board. For a blank or bricked one.</span
+						>
+					</span>
+					<input
+						type="checkbox"
+						role="switch"
+						bind:checked={erase}
+						disabled={running}
+						class="switch"
+					/>
+				</label>
+				{#if erase}
+					<label class="flex cursor-pointer items-start justify-between gap-4 py-3 pl-4">
+						<span class="space-y-0.5">
+							<span class="block text-sm font-semibold">Keep settings</span>
+							<span class="block text-xs text-zinc-500"
+								>A repair: no erase, so WiFi, key and id stay.</span
+							>
+						</span>
+						<input
+							type="checkbox"
+							role="switch"
+							bind:checked={keep}
+							disabled={running}
+							class="switch"
+						/>
+					</label>
+				{/if}
+			</section>
+		{/if}
+		{#if release && !hidden}
+			<section class="space-y-3">
+				<h3 class="text-xs font-semibold text-zinc-500 uppercase">Files in {tag}</h3>
+				<ul class="grid gap-x-4 gap-y-2">
+					{#each release.assets as asset (asset.name)}
+						{@const extra = flashExtras.find((e) => e.name === asset.name)}
+						<li class="flex min-w-0 items-start gap-2 text-xs">
+							<span class="mt-1.5 size-1.5 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600"
+							></span>
+							<span class="min-w-0">
+								<span class="block truncate font-medium text-zinc-700 dark:text-zinc-300"
+									>{asset.name}</span
+								>
+								<span class="block text-zinc-500"
+									>{size(asset.size)}{extra
+										? ` · first flash at 0x${extra.address.toString(16)}`
+										: ''}</span
+								>
+							</span>
+						</li>
+					{/each}
+				</ul>
+			</section>
+		{/if}
+		<section class="space-y-1">
+			<h3 class="text-xs font-semibold text-zinc-500 uppercase">Recovery tools</h3>
+			<p class="text-xs text-zinc-500">
+				These talk to the board's bootloader, so they work whatever it runs, or if it runs nothing.
+			</p>
+			<div class="divide-y divide-zinc-200 dark:divide-zinc-800">
+				{#each [{ label: 'Back up the whole flash', hint: 'Reads everything into a file: minutes for 16 MB.', action: saveBackup }, { label: 'Boot the previous app', hint: 'Boots the app the last install replaced, still in the other slot.', action: bootPreviousApp }] as tool (tool.label)}
+					<button
+						onclick={() => {
+							toolsDialog?.close();
+							tool.action();
+						}}
+						disabled={running || !hasSerial()}
+						class="-mx-2 block w-[calc(100%+1rem)] cursor-pointer rounded-lg px-2 py-3 text-left transition hover:bg-zinc-200/60 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-800/60"
+					>
+						<span class="block text-sm font-semibold">{tool.label}</span>
+						<span class="block text-xs text-zinc-500">{tool.hint}</span>
+					</button>
+				{/each}
+				<div class="space-y-3 py-3">
+					<div>
+						<span class="block text-sm font-semibold">Restore a backup</span>
+						<span class="block text-xs text-zinc-500"
+							>Writes it back whole, once its size, bootloader and partition table check out.</span
+						>
+					</div>
+					<input
+						type="file"
+						accept=".bin,application/octet-stream"
+						disabled={running}
+						onchange={(e) => (backupFile = e.currentTarget.files?.[0] ?? null)}
+						class="w-full text-xs text-zinc-500 file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-zinc-200 file:px-3 file:py-2 file:text-xs file:font-semibold dark:file:bg-zinc-800"
+						aria-label="Backup file to restore"
+					/>
+					<button
+						onclick={() => {
+							toolsDialog?.close();
+							restoreBackup();
+						}}
+						disabled={running || !backupFile || !hasSerial()}
+						class="w-full cursor-pointer rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-semibold transition hover:bg-zinc-200/60 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:hover:bg-zinc-800/60"
+						>Restore backup</button
+					>
+				</div>
+			</div>
+		</section>
+		<p class="mt-auto text-xs text-zinc-500">
+			A backup holds everything on the board, its WiFi password and Beacon key included: keep it
+			private.
+		</p>
+	</div>
+</dialog>
 
 <dialog
 	bind:this={dialog}
@@ -700,3 +777,59 @@
 		</div>
 	</form>
 </dialog>
+
+<style>
+	@media (prefers-reduced-motion: no-preference) {
+		.drawer[open] {
+			animation: slide-in 0.2s ease-out;
+		}
+	}
+	.switch {
+		appearance: none;
+		flex-shrink: 0;
+		margin-top: 0.125rem;
+		width: 2.25rem;
+		height: 1.25rem;
+		border-radius: 9999px;
+		background: var(--color-zinc-300);
+		cursor: pointer;
+		transition: background 0.2s;
+		position: relative;
+	}
+	@media (prefers-color-scheme: dark) {
+		.switch {
+			background: var(--color-zinc-700);
+		}
+	}
+	.switch::after {
+		content: '';
+		position: absolute;
+		top: 0.125rem;
+		left: 0.125rem;
+		width: 1rem;
+		height: 1rem;
+		border-radius: 9999px;
+		background: white;
+		box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+		transition: transform 0.2s;
+	}
+	.switch:checked {
+		background: var(--color-yellow-400);
+	}
+	.switch:checked::after {
+		transform: translateX(1rem);
+	}
+	.switch:focus-visible {
+		outline: 2px solid var(--color-yellow-400);
+		outline-offset: 2px;
+	}
+	.switch:disabled {
+		cursor: not-allowed;
+		opacity: 0.5;
+	}
+	@keyframes slide-in {
+		from {
+			transform: translateX(100%);
+		}
+	}
+</style>
