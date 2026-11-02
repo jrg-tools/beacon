@@ -844,13 +844,29 @@
 
 <style>
 	@media (prefers-reduced-motion: no-preference) {
-		.drawer[open] {
-			animation: slide-in 0.2s ease-out;
+		/* Transitions, not an animation, so closing slides out too: `display` and `overlay` stay
+		   discrete until the slide ends, keeping the closed dialog in the top layer meanwhile. */
+		.drawer,
+		.drawer::backdrop {
+			transition:
+				transform 0.2s ease-out,
+				opacity 0.2s ease-out,
+				display 0.2s allow-discrete,
+				overlay 0.2s allow-discrete;
 		}
-	}
-	@keyframes slide-in {
-		from {
+		.drawer:not([open]) {
 			transform: translateX(100%);
+		}
+		.drawer:not([open])::backdrop {
+			opacity: 0;
+		}
+		@starting-style {
+			.drawer[open] {
+				transform: translateX(100%);
+			}
+			.drawer[open]::backdrop {
+				opacity: 0;
+			}
 		}
 	}
 </style>

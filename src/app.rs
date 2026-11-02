@@ -76,8 +76,8 @@ fn csp(ui_dir: &Path, clerk: &str) -> HeaderValue {
         "default-src 'self'; script-src 'self'{hashes} https://{clerk} https://challenges.cloudflare.com; \
          connect-src 'self' https://{clerk} https://clerk-telemetry.com; \
          img-src 'self' data: https://img.clerk.com; \
-         style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
-         font-src 'self' https://fonts.gstatic.com; worker-src 'self' blob:; \
+         style-src 'self' 'unsafe-inline'; \
+         font-src 'self'; worker-src 'self' blob:; \
          frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; \
          base-uri 'self'; form-action 'self'; object-src 'none'"
     );

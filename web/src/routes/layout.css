@@ -1,9 +1,11 @@
 @import 'tailwindcss';
+/* Served by Beacon itself: loading it from Google would send every visitor's IP there (GDPR). */
+@import '@fontsource-variable/figtree';
 
 /* The look of jrg-life (its src/routes/layout.css): Figtree, zinc, yellow. */
 /* One corner for every box, field and button: rounded-lg. Only pills (tags, status dots) are rounded-full. */
 @theme {
-	--font-sans: 'Figtree', ui-sans-serif, system-ui, sans-serif;
+	--font-sans: 'Figtree Variable', ui-sans-serif, system-ui, sans-serif;
 }
 
 html {
