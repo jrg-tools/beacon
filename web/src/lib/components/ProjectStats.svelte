@@ -6,9 +6,9 @@
 
 	const sum = (key: 'checks' | 'downloads' | 'bytes') => stats.days.reduce((n, d) => n + d[key], 0);
 	const pct = (n: number) => (stats.devices ? `${Math.round((n / stats.devices) * 100)}%` : '—');
-	// From the dataviz skill's palette, light and dark steps: green for the latest, then the 3 hues
-	// that stay apart from it and each other in any order, even with color blindness.
-	const GREEN = ['#008300', '#008300'];
+	// Green for the latest, then 3 hues from the dataviz skill's palette, light and dark steps.
+	// The devices list's "up to date" dot (bg-emerald-500), so the latest reads the same everywhere.
+	const GREEN = ['var(--color-emerald-500)', 'var(--color-emerald-500)'];
 	const PALETTE = [
 		['#2a78d6', '#3987e5'],
 		['#eda100', '#c98500'],
