@@ -15,6 +15,10 @@ updates:
     groups:
       web:
         update-types: [minor, patch]
+    ignore:
+      # typescript-eslint supports TS < 6.1 only; drop once it supports 7.
+      - dependency-name: typescript
+        versions: ['>=6.1']
 
   - package-ecosystem: github-actions
     directory: /
