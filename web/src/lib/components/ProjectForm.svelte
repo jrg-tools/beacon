@@ -136,14 +136,16 @@
 		<button
 			disabled={saving}
 			class="flex-1 cursor-pointer rounded-lg bg-yellow-400 px-6 py-2.5 font-semibold text-zinc-950 transition hover:bg-yellow-300 disabled:opacity-60 sm:flex-none"
-			>{project ? 'Save' : 'Add project'}</button
 		>
+			{project ? 'Save' : 'Add project'}
+		</button>
 		{#if project}
 			<a
 				href={resolve('/admin')}
 				class="rounded-lg px-5 py-2.5 font-semibold text-zinc-500 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
-				>Cancel</a
 			>
+				Cancel
+			</a>
 		{/if}
 	</div>
 </form>

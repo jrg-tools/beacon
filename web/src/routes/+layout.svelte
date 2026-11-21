@@ -33,9 +33,12 @@
 				<img src="/logo.webp" class="w-8 shrink-0 sm:w-9" alt="" />
 				<span class="truncate text-lg font-bold sm:text-xl">Beacon</span>
 			</a>
-			{#if signedIn}<UserButton />{:else if install.admin}<a href={resolve('/admin')} class="action"
-					>Admin</a
-				>{/if}
+			{#if signedIn}<UserButton />{:else if install.admin}<a
+					href={resolve('/admin')}
+					class="action"
+				>
+					Admin
+				</a>{/if}
 		</div>
 	</header>
 {/snippet}

@@ -63,8 +63,10 @@
 							stroke-width="2"
 							stroke-linecap="round"
 							stroke-linejoin="round"
-							aria-hidden="true"><path d="M2 6.5 5 9.5 10 3" /></svg
+							aria-hidden="true"
 						>
+							<path d="M2 6.5 5 9.5 10 3" />
+						</svg>
 					{:else if state === 'failed'}
 						<svg
 							viewBox="0 0 12 12"
@@ -73,8 +75,10 @@
 							stroke="currentColor"
 							stroke-width="2"
 							stroke-linecap="round"
-							aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" /></svg
+							aria-hidden="true"
 						>
+							<path d="M3 3l6 6M9 3l-6 6" />
+						</svg>
 					{/if}
 					<span class="min-w-0 leading-tight sm:truncate">{label}</span>
 				</p>
@@ -119,8 +123,10 @@
 							? 'text-red-400'
 							: line.kind === 'ok'
 								? 'text-emerald-400'
-								: ''}>{line.text}</span
+								: ''}
 					>
+						{line.text}
+					</span>
 				</p>
 			{/each}
 			{#if running}<span class="animate-pulse text-yellow-400">▍</span>{/if}

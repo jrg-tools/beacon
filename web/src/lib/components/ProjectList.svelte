@@ -34,15 +34,18 @@
 			>
 				<span
 					class="grid size-10 shrink-0 place-items-center rounded-lg bg-amber-100 text-xl dark:bg-amber-500/15"
-					aria-hidden="true">{project.emoji}</span
+					aria-hidden="true"
 				>
+					{project.emoji}
+				</span>
 				<div class="min-w-0 flex-1">
 					<p class="flex items-center gap-2 truncate font-semibold">
 						{project.name}
 						<span
 							class="rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-500 dark:border-zinc-700"
-							>{project.latest ?? 'no release'}</span
 						>
+							{project.latest ?? 'no release'}
+						</span>
 					</p>
 					<p class="truncate text-xs text-zinc-400">
 						{project.repo} · {project.devices} devices · synced {ago(project.synced_at)}
@@ -64,8 +67,10 @@
 						onclick={() => {
 							if (confirm(`Delete ${project.name}, its devices and its cached firmware?`))
 								run(() => api.deleteProject(project.id));
-						}}>Delete</button
+						}}
 					>
+						Delete
+					</button>
 				</div>
 			</div>
 		{/snippet}

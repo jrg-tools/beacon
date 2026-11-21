@@ -573,12 +573,13 @@
 				stroke-width="2"
 				stroke-linecap="round"
 				aria-hidden="true"
-				><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1" /><circle
+			>
+				<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1" /><circle
 					cx="15"
 					cy="6"
 					r="2"
-				/><circle cx="9" cy="12" r="2" /><circle cx="17" cy="18" r="2" /></svg
-			>
+				/><circle cx="9" cy="12" r="2" /><circle cx="17" cy="18" r="2" />
+			</svg>
 			<!-- Full flash is on: the drawer holds a setting the install button uses. -->
 			{#if canFull && erase}
 				<span class="absolute top-1.5 right-1.5 size-2 rounded-full bg-yellow-400"></span>
@@ -592,11 +593,11 @@
 				<span class="text-sm font-semibold text-zinc-500 uppercase">Version</span>
 				<select bind:value={tag} disabled={running || !releases.length} class="field">
 					{#each releases as r (r.tag)}
-						<option value={r.tag}
-							>{r.tag}{r.prerelease ? ' (prerelease)' : ''}{r.tag === project?.latest
+						<option value={r.tag}>
+							{r.tag}{r.prerelease ? ' (prerelease)' : ''}{r.tag === project?.latest
 								? ' (latest)'
-								: ''} · {date(r.published_at)}</option
-						>
+								: ''} · {date(r.published_at)}
+						</option>
 					{:else}
 						<option value="">No releases yet</option>
 					{/each}
@@ -607,14 +608,15 @@
 			onclick={install}
 			disabled={running || (!hidden && !release) || !hasSerial()}
 			class="w-full cursor-pointer rounded-lg bg-yellow-400 px-5 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
-			>{running
+		>
+			{running
 				? 'Installing…'
 				: hidden
 					? 'Connect and update'
 					: canFull && erase
 						? `Connect, ${keeps ? 'repair' : 'erase'} and flash ${tag}`
-						: `Connect and install ${tag}`}</button
-		>
+						: `Connect and install ${tag}`}
+		</button>
 		{#if !admin && signIn}
 			{#await signIn then { clerk_publishable_key }}
 				<ClerkProvider publishableKey={clerk_publishable_key}>
@@ -646,16 +648,19 @@
 				onclick={() => toolsDialog?.close()}
 				class="-m-1 cursor-pointer rounded-lg p-1 text-zinc-400 hover:bg-zinc-200/60 hover:text-zinc-700 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-200"
 				aria-label="Close"
-				><svg
+			>
+				<svg
 					viewBox="0 0 24 24"
 					class="size-5"
 					fill="none"
 					stroke="currentColor"
 					stroke-width="2"
 					stroke-linecap="round"
-					aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg
-				></button
-			>
+					aria-hidden="true"
+				>
+					<path d="M18 6 6 18M6 6l12 12" />
+				</svg>
+			</button>
 		</div>
 		{#if canFull}
 			<section class="space-y-1">
@@ -663,11 +668,11 @@
 				<label class="flex cursor-pointer items-start justify-between gap-4 py-3">
 					<span class="space-y-0.5">
 						<span class="block text-sm font-semibold">Full flash</span>
-						<span class="block text-xs text-zinc-500"
-							>Writes the bootloader and partition table too, not just the app. {admin
+						<span class="block text-xs text-zinc-500">
+							Writes the bootloader and partition table too, not just the app. {admin
 								? 'Erases everything unless Keep settings is on, then registers the board.'
-								: 'Its settings and id stay.'} For a blank, bricked or broken board.</span
-						>
+								: 'Its settings and id stay.'} For a blank, bricked or broken board.
+						</span>
 					</span>
 					<input
 						type="checkbox"
@@ -681,9 +686,9 @@
 					<label class="flex cursor-pointer items-start justify-between gap-4 py-3 pl-4">
 						<span class="space-y-0.5">
 							<span class="block text-sm font-semibold">Keep settings</span>
-							<span class="block text-xs text-zinc-500"
-								>A repair: no erase, so WiFi, key and id stay.</span
-							>
+							<span class="block text-xs text-zinc-500">
+								A repair: no erase, so WiFi, key and id stay.
+							</span>
 						</span>
 						<input
 							type="checkbox"
@@ -706,14 +711,14 @@
 							<span class="mt-1.5 size-1.5 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600"
 							></span>
 							<span class="min-w-0">
-								<span class="block truncate font-medium text-zinc-700 dark:text-zinc-300"
-									>{asset.name}</span
-								>
-								<span class="block text-zinc-500"
-									>{size(asset.size)}{extra
+								<span class="block truncate font-medium text-zinc-700 dark:text-zinc-300">
+									{asset.name}
+								</span>
+								<span class="block text-zinc-500">
+									{size(asset.size)}{extra
 										? ` · full flash at 0x${extra.address.toString(16)}`
-										: ''}</span
-								>
+										: ''}
+								</span>
 							</span>
 						</li>
 					{/each}
@@ -742,9 +747,9 @@
 				<div class="space-y-3 py-3">
 					<div>
 						<span class="block text-sm font-semibold">Restore a backup</span>
-						<span class="block text-xs text-zinc-500"
-							>Writes it back whole, once its size, bootloader and partition table check out.</span
-						>
+						<span class="block text-xs text-zinc-500">
+							Writes it back whole, once its size, bootloader and partition table check out.
+						</span>
 					</div>
 					<input
 						type="file"
@@ -761,8 +766,9 @@
 						}}
 						disabled={running || !backupFile || !hasSerial()}
 						class="w-full cursor-pointer rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-semibold transition hover:bg-zinc-200/60 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:hover:bg-zinc-800/60"
-						>Restore backup</button
 					>
+						Restore backup
+					</button>
 				</div>
 			</div>
 		</section>
@@ -791,13 +797,15 @@
 				type="button"
 				onclick={() => dialog?.close('')}
 				class="cursor-pointer rounded-lg px-5 py-2.5 text-sm font-semibold text-zinc-500 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
-				>Skip</button
 			>
+				Skip
+			</button>
 			<button
 				value="register"
 				class="cursor-pointer rounded-lg bg-yellow-400 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-yellow-300"
-				>Register</button
 			>
+				Register
+			</button>
 		</div>
 	</form>
 </dialog>
@@ -824,20 +832,23 @@
 			<button
 				value=""
 				class="cursor-pointer rounded-lg px-5 py-2.5 text-sm font-semibold text-zinc-500 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
-				>Cancel</button
 			>
+				Cancel
+			</button>
 			{#if keepable}
 				<button
 					value="keep"
 					class="cursor-pointer rounded-lg px-5 py-2.5 text-sm font-semibold hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
-					>Repair</button
 				>
+					Repair
+				</button>
 			{/if}
 			<button
 				value="erase"
 				class="cursor-pointer rounded-lg bg-yellow-400 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-yellow-300"
-				>Erase and flash</button
 			>
+				Erase and flash
+			</button>
 		</div>
 	</form>
 </dialog>

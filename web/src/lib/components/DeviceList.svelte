@@ -109,8 +109,9 @@
 		<button
 			disabled={syncing || !hasSerial()}
 			class="shrink-0 cursor-pointer rounded-lg bg-yellow-400 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
-			>{syncing ? 'Syncing…' : 'Sync device'}</button
 		>
+			{syncing ? 'Syncing…' : 'Sync device'}
+		</button>
 	</form>
 	{#if !hasSerial()}
 		<p class="mb-4 text-xs text-zinc-500">
@@ -146,9 +147,9 @@
 									onkeydown={(e) => e.key === 'Escape' && (renaming = null)}
 								/>
 								<button class="action">Save</button>
-								<button type="button" class="action" onclick={() => (renaming = null)}
-									>Cancel</button
-								>
+								<button type="button" class="action" onclick={() => (renaming = null)}>
+									Cancel
+								</button>
 							</form>
 						{:else}
 							<span class="min-w-0 truncate">{device.name}</span>
@@ -176,11 +177,9 @@
 						{@const update = UPDATE[device.update.status]}
 						<p class="flex min-w-0 items-center gap-1.5 text-xs text-zinc-500">
 							<span class="size-1.5 shrink-0 rounded-full {update.dot}"></span>
-							<span class="truncate"
-								>Update to {device.update.tag}: {update.label} · downloaded {ago(
-									device.update.at
-								)}</span
-							>
+							<span class="truncate">
+								Update to {device.update.tag}: {update.label} · downloaded {ago(device.update.at)}
+							</span>
 						</p>
 					{/if}
 				</div>
@@ -188,9 +187,9 @@
 				<div class="hidden w-24 shrink-0 sm:block">
 					<BarChart title="{device.name}: requests per day" data={activity(device)} />
 				</div>
-				<button class="action" onclick={() => (renaming = { id: device.id, name: device.name })}
-					>Rename</button
-				>
+				<button class="action" onclick={() => (renaming = { id: device.id, name: device.name })}>
+					Rename
+				</button>
 				<button class="action action-danger" onclick={() => revoke(device)}>Revoke</button>
 			</div>
 		{/snippet}

@@ -121,8 +121,9 @@
 					{/each}
 					<span
 						class="ml-1 truncate rounded-full bg-white px-1.5 text-[7px] leading-3 text-zinc-400 dark:bg-zinc-900"
-						>beacon.jrg.tools</span
 					>
+						beacon.jrg.tools
+					</span>
 				</div>
 				<div class="space-y-1 p-2">
 					<span class="block h-1 w-1/3 rounded-full bg-yellow-400"></span>
@@ -142,18 +143,21 @@
 						</p>
 						<div class="mt-1 space-y-0.5 text-[6.5px] leading-tight">
 							<span class="row block truncate rounded px-1 py-0.5">USB JTAG/serial debug unit</span>
-							<span class="block truncate rounded px-1 py-0.5 text-zinc-400"
-								>Bluetooth-Incoming-Port</span
-							>
+							<span class="block truncate rounded px-1 py-0.5 text-zinc-400">
+								Bluetooth-Incoming-Port
+							</span>
 						</div>
 						<div class="mt-1 flex justify-end gap-1 text-[6.5px] font-semibold">
 							<span
 								class="rounded px-1.5 py-0.5 text-zinc-500 ring-1 ring-zinc-200 dark:ring-zinc-700"
-								>Cancel</span
 							>
-							<span class="connect rounded bg-zinc-300 px-1.5 py-0.5 text-zinc-500 dark:bg-zinc-700"
-								>Connect</span
+								Cancel
+							</span>
+							<span
+								class="connect rounded bg-zinc-300 px-1.5 py-0.5 text-zinc-500 dark:bg-zinc-700"
 							>
+								Connect
+							</span>
 						</div>
 						{#if !live}
 							<!-- The pointer picking the device, then Connect. -->
@@ -180,13 +184,13 @@
 				{:else if scene === 3 && !failed}
 					<div class="absolute inset-x-[12%] top-[52%] space-y-1" in:fade={{ duration: 250 }}>
 						<span class="flex justify-between text-[8px] font-semibold text-zinc-500">
-							<span
-								>{live?.captions
+							<span>
+								{live?.captions
 									? live.captions[0][0]
 									: live?.tag
 										? `Installing ${live.tag}`
-										: 'Installing'}</span
-							>
+										: 'Installing'}
+							</span>
 							<span>{Math.round(fill * 100)}%</span>
 						</span>
 						<span class="block h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
@@ -462,8 +466,10 @@
 								stroke="currentColor"
 								stroke-width="2.5"
 								stroke-linecap="round"
-								stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7" /></svg
+								stroke-linejoin="round"
 							>
+								<path d="M3.5 8.5l3 3 6-7" />
+							</svg>
 						{:else}{i + 1}{/if}
 					</span>
 					<span class="space-y-0.5">

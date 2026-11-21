@@ -36,12 +36,12 @@
 </ul>
 {#if pages > 1}
 	<nav class="mt-3 flex items-center justify-between text-xs text-zinc-500" aria-label="Pages">
-		<button class="action" disabled={current === 0} onclick={() => (page = current - 1)}
-			>← Previous</button
-		>
+		<button class="action" disabled={current === 0} onclick={() => (page = current - 1)}>
+			← Previous
+		</button>
 		<span class="tabular-nums">{current + 1} / {pages}</span>
-		<button class="action" disabled={current === pages - 1} onclick={() => (page = current + 1)}
-			>Next →</button
-		>
+		<button class="action" disabled={current === pages - 1} onclick={() => (page = current + 1)}>
+			Next →
+		</button>
 	</nav>
 {/if}

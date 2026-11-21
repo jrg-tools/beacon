@@ -117,11 +117,9 @@
 						></span>
 						<span class="font-semibold">{v.version}</span>
 						{#if v.version === stats.latest}<span class="text-zinc-400">latest</span>{/if}
-						<span class="text-zinc-500 tabular-nums"
-							>{counts
-								? `${v.count} ${v.count === 1 ? 'device' : 'devices'}`
-								: share(v.count)}</span
-						>
+						<span class="text-zinc-500 tabular-nums">
+							{counts ? `${v.count} ${v.count === 1 ? 'device' : 'devices'}` : share(v.count)}
+						</span>
 					</span>
 				{/each}
 			</span>

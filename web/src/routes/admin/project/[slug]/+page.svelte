@@ -44,8 +44,9 @@
 		<a
 			href={resolve('/admin')}
 			class="-ml-3 inline-block rounded-lg px-3 py-1.5 text-sm font-semibold text-zinc-500 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60"
-			>← Projects</a
 		>
+			← Projects
+		</a>
 
 		{#if error}
 			<p
@@ -60,8 +61,10 @@
 			<header class="flex flex-wrap items-center gap-4">
 				<span
 					class="grid size-14 shrink-0 place-items-center rounded-lg bg-amber-100 text-3xl dark:bg-amber-500/15"
-					aria-hidden="true">{project.emoji}</span
+					aria-hidden="true"
 				>
+					{project.emoji}
+				</span>
 				<div class="min-w-0 flex-1">
 					<h1 class="truncate text-xl font-semibold">{project.name}</h1>
 					<p class="truncate text-xs text-zinc-400">
@@ -70,8 +73,9 @@
 							target="_blank"
 							rel="noopener noreferrer"
 							class="font-medium text-zinc-500 transition hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-							>{project.repo} ↗</a
 						>
+							{project.repo} ↗
+						</a>
 						· {project.latest ?? 'no release'} · synced {ago(project.synced_at)}
 					</p>
 				</div>
